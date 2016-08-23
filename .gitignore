@@ -1,0 +1,11 @@
+/node_modules/
+/.settings/
+/.project
+/dist/
+/typings/
+report.html
+/coverage/
+.coverrun
+/npm-debug.log
+/docs/
+/mongodb-*
