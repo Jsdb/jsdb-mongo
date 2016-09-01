@@ -2,7 +2,10 @@ import * as SocketIO from 'socket.io';
 import * as Mongo from 'mongodb';
 import * as Debug from 'debug';
 
+import * as Utils from './Utils';
+
 var dbgBroker = Debug('tsdb:mongo:broker');
+var dbgQuery = Debug('tsdb:mongo:query');
 var dbgOplog = Debug('tsdb:mongo:oplog');
 var dbgSocket = Debug('tsdb:mongo:socket');
 var dbgHandler = Debug('tsdb:mongo:handler');
@@ -41,7 +44,7 @@ export class Broker {
     private startWait :Promise<any>[] = [];
 
     private handlers :{[index:string]:Handler} = {};
-    private subscriptions :{[index:string]:{[index:string]:Handler}} = {};
+    private subscriptions :{[index:string]:{[index:string]:Subscriber}} = {};
     private lastOplogStream :Mongo.Cursor;
 
     constructor($socket?: SocketIO.Server, collectionDb?: string, collectionName?: string, oplogDb?: string, collectionOptions? :any) {
@@ -203,8 +206,8 @@ export class Broker {
         delete this.handlers[handler.id];
     }
 
-    subscribe(handler :Handler, path :string) {
-        path = Broker.normalizePath(path);
+    subscribe(handler :Subscriber, path :string) {
+        path = Utils.normalizePath(path);
         var ps = this.subscriptions[path];
         if (!ps) {
             this.subscriptions[path] = ps = {};
@@ -212,8 +215,8 @@ export class Broker {
         ps[handler.id] = handler;
     }
 
-    unsubscribe(handler :Handler, path :string) {
-        path = Broker.normalizePath(path);
+    unsubscribe(handler :Subscriber, path :string) {
+        path = Utils.normalizePath(path);
         var ps = this.subscriptions[path];
         if (!ps) return;
         delete ps[handler.id];
@@ -224,12 +227,12 @@ export class Broker {
     }
 
     broadcast(path :string, val :any) {
-        var alreadySent :{[index:string]:Handler} = {};
+        var alreadySent :{[index:string]:Subscriber} = {};
         this.broadcastDown(path, val, alreadySent);
-        this.broadcastUp(Broker.parentPath(path), val, path, alreadySent);
+        this.broadcastUp(Utils.parentPath(path), val, path, alreadySent);
     }
 
-    private broadcastDown(path :string, val :any, alreadySent :{[index:string]:Handler}) {
+    private broadcastDown(path :string, val :any, alreadySent :{[index:string]:Subscriber}) {
         if (val == null) {
             for (var k in this.subscriptions) {
                 if (k.indexOf(path) == 0) {
@@ -245,14 +248,14 @@ export class Broker {
         this.broadcastToHandlers(path, val, alreadySent);
     }
 
-    private broadcastUp(path :string, val :any, fullpath :string, alreadySent :{[index:string]:Handler}) {
+    private broadcastUp(path :string, val :any, fullpath :string, alreadySent :{[index:string]:Subscriber}) {
+        if (!path) return;
         this.broadcastToHandlers(path, val, alreadySent, fullpath);
         if (path.length == 0) return;
-        path = Broker.parentPath(path);
-        this.broadcastUp(path, val, fullpath, alreadySent);
+        this.broadcastUp(Utils.parentPath(path), val, fullpath, alreadySent);
     }
 
-    private broadcastToHandlers(path :string, val :any, alreadySent :{[index:string]:Handler}, fullpath? :string) {
+    private broadcastToHandlers(path :string, val :any, alreadySent :{[index:string]:Subscriber}, fullpath? :string) {
         var ps = this.subscriptions[path];
         if (!ps) return;
         var tspath = fullpath || path;
@@ -294,46 +297,40 @@ export class Broker {
         return Promise.all(proms);
     }
 
-    static normalizePath(path :string) {
-        path = path.replace(/\/\.+\//g,'/');
-        path = path.replace(/\/\/+/g,'/');
-        if (path.charAt(0) != '/') path = '/' + path;
-        if (path.charAt(path.length-1) == '/') path = path.substr(0,path.length-1);
-        return path;
-    }
-
-    static leafPath(path :string) :string {
-        return path.substr(path.lastIndexOf('/') + 1);
-    }
-
-    static parentPath(path :string) :string {
-        return path.substr(0, path.lastIndexOf('/'));
-    }
-
-    static pathRegexp(path :string) :RegExp {
-        path = path.replace(/[\-\[\]\/\{\}\(\)\*\+\?\.\\\^\$\|]/g, "\\$&");
-        return new RegExp('^' + path + '.*');
-    }
-
     del(handler :Handler, paths :string[]) :Promise<any> {
         var ops :any[] = [];
         for (var i = 0; i < paths.length; i++) {
             ops[i] = {
                 deleteMany: {
                     filter: {
-                        _id: Broker.pathRegexp(paths[i])
+                        _id: Utils.pathRegexp(paths[i])
                     }
                 }
             }
         }
         return this.collection.bulkWrite(ops);
     }
+
+    merge(handler :Handler, path :string, val :any) :Promise<any> {
+        path = Utils.normalizePath(path);
+
+        var proms :Promise<any>[] = [];
+        for (var k in val) {
+            if (val[k] == null) {
+                proms.push(this.set(handler,path+'/'+k,null));
+            } else {
+                proms.push(this.set(handler,path+'/'+k,val[k]));
+            }
+        }
+        return Promise.all(proms);
+    }
+
     set(handler :Handler, path :string, val :any) :Promise<any> {
-        path = Broker.normalizePath(path);
+        path = Utils.normalizePath(path);
         if (val === null) {
-            var leaf = Broker.leafPath(path);
+            var leaf = Utils.leafPath(path);
             if (!leaf) throw new Error('Cannot write a primitive value on root');
-            var par = Broker.parentPath(path);
+            var par = Utils.parentPath(path);
             dbgBroker("Unsetting %s -> %s", par, leaf);
             var obj :any = {};
             obj[leaf] = 1;
@@ -344,9 +341,9 @@ export class Broker {
         }
         if (typeof val == 'string' || typeof val == 'number' || typeof val == 'boolean') {
             // Saving a primitive value
-            var leaf = Broker.leafPath(path);
+            var leaf = Utils.leafPath(path);
             if (!leaf) throw new Error('Cannot write a primitive value on root');
-            var par = Broker.parentPath(path);
+            var par = Utils.parentPath(path);
             dbgBroker("Setting %s -> %s = %s", par, leaf, val);
             var obj :any = {};
             obj[leaf] = val;
@@ -356,7 +353,7 @@ export class Broker {
             ]);
         }
 
-        return this.collection.find({_id:Broker.pathRegexp(path)}).sort({_id:1}).toArray().then((pres)=>{
+        return this.collection.find({_id:Utils.pathRegexp(path)}).sort({_id:1}).toArray().then((pres)=>{
             var premap :{[index:string]:any} = {};
             for (var i = 0; i < pres.length; i++) {
                 var pre = pres[i];
@@ -365,8 +362,7 @@ export class Broker {
 
             // Saving a complex object
             var unrolled :any[] = [];
-            var deletes :any[] = [];
-            this.recursiveUnroll(path, val, unrolled, deletes);
+            this.recursiveUnroll(path, val, unrolled);
             if (unrolled.length == 0) {
                 dbgBroker("Nothing to write in path %s with val %o", path, val);
                 return Promise.resolve();
@@ -401,12 +397,13 @@ export class Broker {
         var atlo = false;
         for (var k in val) {
             var subv = val[k];
+            if (subv == null) {
+                dels.push(path + '/' + k);
+                continue;
+            }
             if (typeof(subv) == 'function' || typeof(subv) == 'object') {
                 this.recursiveUnroll(path + '/' + k, subv, writes, dels);
                 continue; 
-            }
-            if (subv === null) {
-                dels.push(path + '/' + k);
             }
             atlo = true;
             myobj[k] = val[k];
@@ -416,26 +413,40 @@ export class Broker {
         }
     }
 
-    fetch(handler :Handler, path :string) {
+    fetch(handler :Subscriber, path :string, extra? :any) :Promise<any> {
         dbgBroker('Fetching %s for %s', path, handler.id);
-        path = Broker.normalizePath(path);
-        this.collection
-            .find({_id:Broker.pathRegexp(path)}).sort({_id:1})
+        path = Utils.normalizePath(path);
+        return this.collection
+            .find({_id:Utils.pathRegexp(path)}).sort({_id:1})
+            // TODO Replace this with .stream() so that it's interruptible
             .toArray()
             .then((data)=>{
                 if (data.length != 0) {
                     dbgBroker("Found %s bag objects to recompose", data.length);
-                    this.stream(handler, path, data);
+                    // TODO consider streaming data progressively
+                    /*
+                    to be exact :
+                    - while looping on data
+                    - if we pass from one child to another child
+                    - if the child is not a native, switch to "streaming" mode
+                    - in streaming mode, send a separate value event for each child 
+                    */ 
+                    // recompose the object and send it
+                    var recomposer = new Recomposer(path);
+                    for (var i = 0; i < data.length; i++) {
+                        recomposer.add(data[i]);
+                    }
+                    handler.sendValue(path,recomposer.get(), extra);
                     return;
                 } 
-                this.collection.findOne({_id:Broker.parentPath(path)}).then((val)=>{
+                this.collection.findOne({_id:Utils.parentPath(path)}).then((val)=>{
                     if (val == null) {
                         dbgBroker("Found no value on parent path");
-                        handler.sendValue(path, null);
+                        handler.sendValue(path, null, extra);
                     } else {
-                        var leaf = Broker.leafPath(path);
+                        var leaf = Utils.leafPath(path);
                         dbgBroker("Found %s on parent path", val[leaf]);
-                        handler.sendValue(path, val[leaf]);
+                        handler.sendValue(path, val[leaf], extra);
                     }
                 });
             })
@@ -445,22 +456,347 @@ export class Broker {
             });
     }
 
-    stream(handler :Handler, path :string, data :any[]) {
-        // recompose the object and send it
-        var recomposer = new Recomposer(path);
-        for (var i = 0; i < data.length; i++) {
-            recomposer.add(data[i]);
+    query(queryState :SimpleQueryState) {
+        var qo :any = {};
+
+        var def = queryState.def;
+
+        qo._id = queryState.pathRegex;
+        if (def.compareField) {
+            var leafField = Utils.leafPath(def.compareField);
+            if (typeof(def.equals) !== 'undefined') {
+                qo[leafField] = def.equals;
+            } else if (typeof(def.from) !== 'undefined' || typeof(def.to) !== 'undefined') {
+                qo[leafField] = {};
+                if (typeof(def.from) !== 'undefined') qo[leafField].$gt = def.from;
+                if (typeof(def.to) !== 'undefined') qo[leafField].$lt = def.to;
+            }
         }
-        handler.sendValue(path,recomposer.get());
+
+        dbgBroker("Query object %o", qo);
+
+        var cursor = this.collection.find(qo);
+
+        var sortobj :any = {};
+        if (def.compareField && typeof(def.equals) == 'undefined') {
+            sortobj[def.compareField] = def.limitLast ? -1 : 1;
+        } else {
+            sortobj['_id'] = def.limitLast ? -1 : 1;
+        }
+        cursor = cursor.sort(sortobj);
+
+        if (def.limit) {
+            cursor = cursor.limit(def.limit);
+        }
+
+        //return cursor.toArray().then((data)=>console.log(data));
+
+        cursor = cursor.stream();
+
+        cursor.on('data', (data :any)=>{
+            var elementUrl = Utils.limitToChild(data._id, def.path);
+            queryState.found(elementUrl, data);
+        });
+        cursor.on('end', ()=>{
+            queryState.foundEnd();
+            console.log('done!');
+        });
+    }
+
+}
+
+export interface SimpleQueryDef {
+    /**
+     * Internal id used to cache and handle queries
+     */
+    id? :string; 
+
+    path? :string;
+
+    // Query part, what to compare, wether to find equals or limit from->to
+    compareField? :string;
+    equals? :any;
+    from? :string;
+    to? :string;
+
+    // Limit by number
+    limit? :number;
+    limitLast? :boolean;
+}
+
+export interface Subscriber {
+    id :string;
+    closed :boolean;
+    sendValue(path :string, val :any, extra? :any) :void;
+}
+
+class ForwardingSubscriber implements Subscriber {
+    constructor(
+        public id :string,
+        protected from :Subscriber,
+        protected to :Subscriber) 
+    {
+
+    }
+
+    get closed() {
+        return this.from.closed || this.to.closed;
+    }
+
+    sendValue(path :string, val :any, extra? :any) :void {
+        this.to.sendValue(path, val, extra);
     }
 }
 
+class SortAwareForwardingSubscriber extends ForwardingSubscriber {
+    protected sorting = true;
+    protected sent :{[index:string]:boolean} = {};
+    protected cached :{[index:string]:any} = {};
+    protected cachedUpd :{[index:string]:any[]} = {};
+
+
+    sendValue(path :string, val :any, extra? :any) :void {
+        if (!this.sorting) {
+            super.sendValue(path, val, extra);
+            return;
+        }
+        if (!extra.q) {
+            // Not part of the query, it's probably an update
+            var upcache = this.cachedUpd[path];
+            if (!upcache) {
+                upcache = [];
+                this.cachedUpd[path] = upcache;
+            }
+            upcache.push({p:path, v:val, e:extra});
+        } else if (extra.aft) {
+            if (this.sent[extra.aft]) {
+                this.forward(path, val, extra);
+            } else {
+                dbgBroker("Caching %s cause %s not yet sent", path, extra.aft);
+                this.cached[extra.aft] = {p:path, v:val, e:extra};
+            }
+        } else {
+            this.forward(path, val, extra);
+        }
+    }
+
+    forward(path :string, val :any, extra? :any) :void {
+        this.sent[path] = true;
+        super.sendValue(path, val, extra);
+
+        var upcache = this.cachedUpd[path];
+        if (upcache) {
+            dbgBroker("Sending cached updates to %s", path);
+            for (var i = 0; i < upcache.length; i++) {
+                var incache = upcache[i];
+                super.sendValue(incache.p, incache.v, incache.e);
+            }
+        }
+
+        incache = this.cached[path];
+        if (!incache) return;
+
+        delete this.cached[path];
+        dbgBroker("Sending %s cause %s now is sent", incache.p, path);
+        this.forward(incache.p, incache.v, incache.e);
+    }
+
+    stopSorting() {
+        dbgBroker("Stop sorting and flushing cache")
+        // Flush anything still in cache
+        var ks = Object.getOwnPropertyNames(this.cached);
+        for (var i = 0; i < ks.length; i++) {
+            var k = ks[i];
+            var incache = this.cached[k];
+            if (!incache) continue;
+            delete this.cached[k];
+            this.forward(incache.p, incache.v, incache.e);
+        }
+        // Clear cache and sent
+        this.cached = null;
+        this.cachedUpd = null;
+        this.sent = null;
+        this.sorting = false;
+    }
+}
+
+export interface SimpleQueryEntry {
+    path :string;
+    value :string;
+}
+
+export class SimpleQueryState implements Subscriber {
+    def :SimpleQueryDef;
+    /**
+     * path->sort value
+     */
+    invalues :SimpleQueryEntry[] = [];
+    handler :Handler;
+    broker :Broker;
+
+    closed :boolean = false;
+
+    private forwarder :SortAwareForwardingSubscriber = null;
+    private _pathRegex :RegExp = null;
+
+    private fetchingCnt = 0;
+    private fetchEnded = false;
+
+    constructor(handler :Handler, broker :Broker, def :SimpleQueryDef) {
+        this.handler = handler;
+        this.broker = broker;
+        this.def = def;
+        this.forwarder = new SortAwareForwardingSubscriber(this.id + "fwd", this, this.handler);
+    }
+
+    get id() {
+        return this.def.id;
+    }
+
+    get pathRegex() {
+        if (!this._pathRegex) {
+            var def = this.def;
+
+            // Limit to the path, and if needed subpath
+            var subp :string = null;
+            if (def.compareField) {
+                subp = Utils.parentPath(def.compareField);
+            }
+            subp = subp || '';
+            dbgBroker("Subpath %s", subp);
+
+            var path = def.path;
+
+            this._pathRegex = Utils.pathRegexp(path, subp);
+        }
+        return this._pathRegex;
+    }
+
+    positionFor(val :string) :number {
+        for (var i = 0; i < this.invalues.length; i++) {
+            if (this.invalues[i].value > val) return i;
+        }
+        return this.invalues.length;
+    }
+
+    /**
+     * Start the query, subscribing where needed
+     */
+    start() {
+        this.broker.query(this);
+        this.broker.subscribe(this, this.def.path);
+    }
+
+    stop() {
+        this.closed = true;
+        this.broker.unsubscribe(this, this.def.path);
+        for (var k in this.invalues) {
+            this.broker.unsubscribe(this, k);
+            this.broker.unsubscribe(this.forwarder, k);
+        }
+    }
+
+    found(path :string, data :any) {
+        var ind = this.invalues.length;
+        var eleVal :any = null;
+        if (this.def.compareField) {
+            eleVal = data[Utils.leafPath(this.def.compareField)];
+        } else {
+            eleVal = Utils.leafPath(path);
+        }
+        ind = this.positionFor(eleVal);
+        //dbgBroker("For element %s the sort value is %s and the position %s", path, eleVal, ind);
+        var prePath :string = null;
+        if (ind) prePath = this.invalues[ind-1].path;
+        this.invalues.splice(ind,0,{path:path,value:eleVal});
+        this.fetchingCnt++;
+        this.broker.subscribe(this.forwarder, path);
+        this.broker.fetch(this.forwarder, path, {q:this.id, aft:prePath}).then(()=>{
+            this.fetchingCnt--;
+            if (this.fetchingCnt == 0 && this.fetchEnded) {
+                this.forwarder.stopSorting();
+                this.handler.queryFetchEnd(this.id);
+            }
+        });
+    }
+
+    exited(path :string, ind? :number) {
+        this.handler.queryExit(path, this.id);
+        this.broker.unsubscribe(this.forwarder, path);
+        if (typeof(ind) == 'undefined') {
+            for (var i = 0; i < this.invalues.length; i++) {
+                if (this.invalues[i].path == path) {
+                    ind = i;
+                    break;
+                }
+            }
+        }
+        this.invalues.splice(ind,1);
+    }
+
+    foundEnd() {
+        this.fetchEnded = true;
+    }
+
+
+    checkExit(path :string) {
+        for (var i = 0; i < this.invalues.length; i++) {
+            if (this.invalues[i].path == path) {
+                this.exited(path,i);
+                return;
+            }
+        }
+    }
+
+    sendValue(path :string, val :any, extra? :any) :void {
+        var extra :any = {};
+        [path,val] = Utils.normalizeUpdatedValue(path,val);
+        dbgQuery("%s : Evaluating %s from modifications in %s in %s", this.id, path, val, this.pathRegex);
+        // Check if this makes a difference for the query in-out, find the value of the compareField
+        if (path.match(this.pathRegex)) {
+            dbgQuery("Matched");
+            if (this.def.compareField) {
+                var eleVal = val[Utils.leafPath(this.def.compareField)];
+            } else {
+                eleVal = Utils.leafPath(path);
+            }
+            // Check if the value is in the acceptable range
+            if (typeof(this.def.equals) !== 'undefined') {
+                if (this.def.equals != eleVal) return this.checkExit(path);
+            } else if (typeof(this.def.from) !== 'undefined') {
+                if (eleVal < this.def.from) return this.checkExit(path);
+            } else if (typeof(this.def.to) !== 'undefined') {
+                if (eleVal > this.def.to) return this.checkExit(path);
+            }
+            var pos = this.positionFor(eleVal);
+            if (this.def.limit) {
+                // If the position is over the limit we can discard this
+                if (pos >= this.def.limit) return this.checkExit(path);
+            }
+            // We have a new value to insert
+            this.invalues.splice(pos,0,{path:path,value:eleVal});
+            var prePath :string = null;
+            if (pos) prePath = this.invalues[pos-1].path;
+            this.broker.fetch(this.forwarder, path, {q:this.id, aft:prePath});
+
+            if (this.def.limit) {
+                // Check who went out
+                var ele = this.invalues[this.invalues.length-1];
+                this.exited(ele.path, this.invalues.length);
+            } 
+        }
+    }
+
+}
+
+
 // Does not need to export, but there are no friendly/package/module accessible methods, and Broker.subscribe will complain is Handler is private
-export class Handler {
+export class Handler implements Subscriber {
 
     id = 'na';
     closed = false;
     private pathSubs :{[index:string]:boolean} = {};
+    private queries :{[index:string]:SimpleQueryState} = {};
 
  
     constructor(
@@ -472,8 +808,12 @@ export class Handler {
         socket.on('sp', (path:string,fn:Function)=>fn(this.subscribePath(path)));
         socket.on('up', (path:string,fn:Function)=>fn(this.unsubscribePath(path)));
         socket.on('pi', (id:string,fn:Function)=>fn(this.ping(id)));
+
+        socket.on('sq', (def:SimpleQueryDef,fn:Function)=>fn(this.subscribeQuery(def)));
+        socket.on('uq', (id:string,fn:Function)=>fn(this.unsubscribeQuery(id)));
         
         socket.on('s', (path:string, val :any, fn:Function)=>this.set(path,val, fn));
+        socket.on('m', (path:string, val :any, fn:Function)=>this.merge(path,val, fn));
 
         socket.on('disconnect', ()=>{
             this.close();
@@ -490,10 +830,16 @@ export class Handler {
         this.closed = true;
         this.socket.removeAllListeners();
         this.socket = null;
+
         for (var k in this.pathSubs) {
             this.broker.unsubscribe(this,k);
         }
+        for (var k in this.queries) {
+            this.queries[k].stop();
+        }
+
         // TODO stop ongoing fetch operations?
+
         this.broker.unregister(this);
         this.broker = null;
         this.authData = null;
@@ -521,6 +867,30 @@ export class Handler {
         return 'k';
     }
 
+    subscribeQuery(def :SimpleQueryDef) {
+        if (this.queries[def.id]) {
+            dbgHandler("%s was already subscribed to query %s", this.id, def.id);
+            return 'k';
+        }
+        dbgHandler("%s subscribing query to %s", this.id, def.path);
+        var state = new SimpleQueryState(this, this.broker, def);
+        this.queries[def.id] = state;
+        state.start();
+        return 'k';
+    }
+
+    unsubscribeQuery(id :string) {
+        var state = this.queries[id];
+        if (!state) {
+            dbgHandler("%s was already unsubscribed from query %s", this.id, id);
+            return 'k';
+        }
+        dbgHandler("%s unsubscribing from query %s", this.id, id);
+        state.stop();
+        delete this.queries[id];
+        return 'k';
+    }
+
     ping(id :string) {
         dbgHandler("%s received ping %s", this.id, id);
         return id;
@@ -535,9 +905,31 @@ export class Handler {
         });
     }
 
-    sendValue(path :string, val :any) {
+    merge(path :string, val :any, cb :Function) {
+        dbgHandler("%s merging in %s %o", this.id, path, val);
+        // TODO security here
+        this.broker.merge(this, path, val).then(()=>cb('k')).catch((e)=>{
+            dbgHandler("Got error", e);
+            // TODO how to handle errors?
+        });
+    }
+
+    sendValue(path :string, val :any, extra? :any) {
+        // TODO evaluate query matching
         // TODO security filter here?
-        this.socket.emit('v', {p:path,v:val});
+        var msg :any = {p:path,v:val};
+        for (var k in extra) {
+            msg[k] = extra[k];
+        }
+        this.socket.emit('v', msg);
+    }
+
+    queryFetchEnd(queryId :string) {
+        this.socket.emit('qd', {q:queryId});
+    }
+
+    queryExit(path :string, queryId :string) {
+        this.socket.emit('qx', {q:queryId, p: path});
     }
 }
 
@@ -547,7 +939,7 @@ export class Recomposer {
     refs :{[index:string]:any} = {};
 
     constructor(base :string) {
-        this.base = Broker.normalizePath(base);
+        this.base = Utils.normalizePath(base);
     }
 
     add(obj :any) {
@@ -573,8 +965,8 @@ export class Recomposer {
             this.refs[path] = acref;
         }
         if (path == this.base) return;
-        var par = Broker.parentPath(path);
-        var lst = Broker.leafPath(path);
+        var par = Utils.parentPath(path);
+        var lst = Utils.leafPath(path);
         var preobj :any = {};
         preobj[lst] = acref;
         this.findOrCreateRefFor(par, preobj);

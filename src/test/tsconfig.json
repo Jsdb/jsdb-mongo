@@ -1,9 +1,11 @@
 {
+    "compileOnSave": true,
     "compilerOptions": {
-        "target": "es5",
+        "declaration": true,
+        "forceConsistentCasingInFileNames": true,
         "module": "commonjs",
         "outDir": "../js/",
         "sourceMap": true,
-        "removeComments": false
+        "target": "es5"
     }
 }

@@ -5,8 +5,12 @@ Debug.enable('tsdb:*');
 
 import * as SocketIO from 'socket.io';
 import * as SocketClient from 'socket.io-client';
-import {Broker,AuthService,Handler,Recomposer} from '../main/Broker';
+
+import {Broker,AuthService,SimpleQueryDef,SimpleQueryState,Handler,Recomposer} from '../main/Broker';
+import * as Utils from '../main/Utils';
+
 import {assert,is} from 'tsmatchers';
+import {Matcher,matcherOrEquals} from 'tsmatchers/js/main/tsMatchers';
 
 
 var mongoUrl = 'mongodb://localhost:27017/';
@@ -70,6 +74,7 @@ interface ConnectedClient {
     broker :Broker & TestBroker;
     connection :SocketIOClient.Socket;
     handler :Handler & TestHandler;
+    eventCheck? :CheckPromise<SocketEvent[]>;
 }
 
 function getConnectedClient() :Promise<ConnectedClient> {
@@ -103,6 +108,67 @@ function sendCommand(cc :ConnectedClient, cmd :string, ...args :any[]) :Promise<
     });
 }
 
+interface SocketEvent {
+    event :string;
+    match :any;
+}
+
+interface CheckPromise<T> extends Promise<T> {
+    stop();
+}
+
+function checkEvents(conn :SocketIOClient.Socket, events :SocketEvent[], anyOrder = false) :CheckPromise<SocketEvent[]> {
+    var ret :SocketEvent[] = [];
+    var cbs = {};
+    var cp = <CheckPromise<SocketEvent[]>>new Promise<SocketEvent[]>((res,err) => {
+        var evtIds :{[index:string]:boolean} = {};
+        for (var i = 0; i < events.length; i++) {
+            evtIds[events[i].event] = true;
+        }
+        var acevt = 0;
+        for (let k in evtIds) {
+            var cb = (obj) => {
+                try {
+                    ret.push({event:k, match: obj});
+                    assert("Got too many events", events, is.not.array.withLength(0));
+                    if (anyOrder) {
+                        var found = false;
+                        var match :Matcher<any> = null;
+                        for (var i = 0; i < events.length; i++) {
+                            var acevobj = events[i];
+                            if (acevobj.event != k) continue;
+                            match = matcherOrEquals(acevobj.match);
+                            if (match.matches(obj)) {
+                                events.splice(i,1);
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            assert("There is a matching event", obj, match);
+                        }
+                    } else {
+                        var acevobj = events.shift();
+                        assert("Checking event " + (acevt++) + " of type " + acevobj.event, obj, acevobj.match);
+                    }
+                    if (events.length == 0) res(ret);
+                } catch (e) {
+                    console.log("Received events", ret);
+                    err(e);
+                }
+            };
+            conn.on(k, cb);
+            cbs[k] = cb;
+        }
+    });
+    cp.stop = ()=>{
+        for (var k in cbs) {
+            conn.off(k, cbs[k]);
+        }
+    };
+    return cp;
+}
+
 
 describe("Broker >", ()=>{
     describe("Basics >", ()=>{
@@ -114,8 +180,15 @@ describe("Broker >", ()=>{
                 '//ciao///mamma/./'
             ];
             for (var i = 0; i < paths.length; i++) {
-                assert("Checking path '" + paths[i] + "'", Broker.normalizePath(paths[i]), '/ciao/mamma');
+                assert("Checking path '" + paths[i] + "'", Utils.normalizePath(paths[i]), '/ciao/mamma');
             }
+        });
+
+        it('Should limitToChild paths', ()=>{
+            assert('wrong subpath', Utils.limitToChild('/users/1/sub/name','/people'), is.falsey);
+            assert('single element', Utils.limitToChild('/users/1','/users'), '/users/1');
+            assert('one sub element', Utils.limitToChild('/users/1/sub','/users'), '/users/1');
+            assert('two sub element', Utils.limitToChild('/users/1/sub/name','/users'), '/users/1');
         });
 
         it('Should create a broker', ()=>{
@@ -243,6 +316,64 @@ describe("Broker >", ()=>{
                     assert("should exist only one data", data, is.array.withLength(1));
                     var rec = data[0];
                     assert("record is right", rec, is.strictly.object.matching({_id:'/test', data1:'ciao',data2:'quanto',data3:'va'}));
+                });
+            });
+        });
+
+        describe('Merge >', ()=>{
+            beforeEach(()=>{
+                return getConnectedClient().then((cc)=>{
+                    return mongoColl.deleteMany({}).then(()=>cc);
+                }).then((cc)=>{
+                    return sendCommand(cc, 's', '/users', 
+                    [
+                        {
+                            name:'simone',surname:'gianni',
+                            addresses: [
+                                {name:'home',line:'via tiburtina'},
+                                {name:'office',line:'viale carso'}
+                            ]
+                        }
+                        ,
+                        {
+                            name:'sara',surname:'gianni',
+                            addresses: [
+                                {name:'home',line:'via tiburtina'},
+                                {name:'office',line:'via luca signorelli'}
+                            ]
+                        }
+                    ]);
+                });
+            });
+
+            it('Should correctly unroll deletes for simple objects', ()=>{
+                var brk = new Broker();
+
+                var unroll :Object[] = [];
+                var deletes :string[] = [];
+                brk.recursiveUnroll('/test/root', {a:1,b:{c:{d:1}},e:null,f:{g:null}}, unroll, deletes);
+
+                assert("right length of unroll", unroll, is.array.withLength(2));
+                assert("has element for a:1", unroll, is.array.containing(is.object.matching({_id:'/test/root', a:1})));
+                assert("has element for d:1", unroll, is.array.containing(is.object.matching({_id:'/test/root/b/c', d:1})));
+
+                assert("right length of deletes", deletes, is.array.withLength(2));
+                assert("has deletes for e:null", deletes, is.array.containing('/test/root/e'));
+                assert("has deletes for e:null", deletes, is.array.containing('/test/root/f/g'));
+            });
+
+            it('Should update simple object values', ()=>{
+                return getConnectedClient().then((cc)=>{
+                    return sendCommand(cc, 'm', '/users/0', {phone:'iphone',addresses:null,surname:null});
+                }).then((ack)=>{
+                    assert("returned correct ack",ack,'k');
+                    return mongoColl.find({}).toArray();
+                }).then((data)=>{
+                    assert("should exist the right datas", data, is.array.withLength(4));
+                    assert("record merged user is right", data, is.array.containing(is.strictly.object.matching({_id:'/users/0',phone:'iphone',name:'simone'})));
+                    assert("record for user is right", data, is.array.containing(is.strictly.object.matching({_id:'/users/1',name:'sara',surname:'gianni'})));
+                    assert("record for home address", data, is.array.containing(is.strictly.object.matching({_id:'/users/1/addresses/0',name:'home',line:'via tiburtina'})));
+                    assert("record for office address", data, is.array.containing(is.strictly.object.matching({_id:'/users/1/addresses/1',name:'office',line:'via luca signorelli'})));
                 });
             });
         });
@@ -376,261 +507,536 @@ describe("Broker >", ()=>{
             );
         });
 
-        it('Should fetch a simple object', (done)=>{
-            return getConnectedClient().then((cc)=>{
-                cc.connection.on('v',(pl)=>{
-                    assert("right payload", pl, is.object.matching({p:'/users/2',v:{name:'simone',surname:'altro'}}));
-                    done();
+        describe('Fetching >', ()=>{
+            it('Should fetch a simple object', (done)=>{
+                return getConnectedClient().then((cc)=>{
+                    cc.connection.on('v',(pl)=>{
+                        assert("right payload", pl, is.object.matching({p:'/users/2',v:{name:'simone',surname:'altro'}}));
+                        done();
+                    });
+                    return sendCommand(cc, 'sp', '/users/2');
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
                 });
-                return sendCommand(cc, 'sp', '/users/2');
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
+            });
+
+            it('Should fetch a complex object', (done)=>{
+                return getConnectedClient().then((cc)=>{
+                    cc.connection.on('v',(pl)=>{
+                        assert("right payload", pl, is.object.matching(
+                        {
+                            p:'/users/0',
+                            v: {
+                                name:'simone',surname:'gianni',
+                                addresses: [
+                                    {name:'home',line:'via tiburtina'},
+                                    {name:'office',line:'viale carso'}
+                                ]
+                            }
+                        }));
+                        done();
+                    });
+                    return sendCommand(cc, 'sp', '/users/0');
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                });
+            });
+
+            it('should fetch a specific value', (done)=>{
+                return getConnectedClient().then((cc)=>{
+                    cc.connection.on('v',(pl)=>{
+                        assert("right payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
+                        done();
+                    });
+                    return sendCommand(cc, 'sp', '/users/2/name');
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                });
             });
         });
 
-        it('Should fetch a complex object', (done)=>{
-            return getConnectedClient().then((cc)=>{
-                cc.connection.on('v',(pl)=>{
-                    assert("right payload", pl, is.object.matching(
-                    {
-                        p:'/users/0',
-                        v: {
-                            name:'simone',surname:'gianni',
-                            addresses: [
-                                {name:'home',line:'via tiburtina'},
-                                {name:'office',line:'viale carso'}
-                            ]
+        describe("Path notify >", ()=>{
+            it('Should notify of changes on a simple object', (done)=>{
+                var evtCount = 0;
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.connection.on('v',(pl)=>{
+                        if (evtCount == 0) {
+                            assert("right fetch payload", pl, is.object.matching({p:'/users/2',v:{name:'simone',surname:'altro'}}));
+                        } else if (evtCount == 1) {
+                            assert("right update payload", pl, is.object.matching({p:'/users/2',v:{name:'simona',surname:'altrini'}}));
+                            done();
                         }
-                    }));
-                    done();
+                        evtCount++;
+                    });
+                    return sendCommand(cc, 'sp', '/users/2');
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                    return sendCommand(cc, 's', '/users/2',{name:'simona',surname:'altrini'});
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
                 });
-                return sendCommand(cc, 'sp', '/users/0');
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
+            });
+
+            it('Should notify of changes done with merge', ()=>{
+                var evts :any[] = [];
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.connection.on('v',(pl)=>{
+                        evts.push(pl);
+                    });
+                    return sendCommand(cc, 'sp', '/users/2');
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                    return sendCommand(cc, 'm', '/users/2',{name:'simona',surname:null,phone:'iphone'});
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                    return wait(100);
+                }).then(()=>{
+                    assert("right number of events", evts, is.array.withLength(4));
+                    assert("has event for name:simona", evts, is.array.containing(is.object.matching({"p":"/users/2","v":{"name":"simone","surname":"altro"}})));
+                    assert("has event for name:simona", evts, is.array.containing(is.object.matching({ p: '/users/2/name', v: 'simona' })));
+                    assert("has event for surname:null", evts, is.array.containing(is.object.matching({ p: '/users/2/surname', v: null })));
+                    assert("has event for phone:iphone", evts, is.array.containing(is.object.matching({ p: '/users/2/phone', v: 'iphone' })));
+                });
+            });
+            
+
+            it('Should notify of changes on specific value', (done)=>{
+                var evtCount = 0;
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.connection.on('v',(pl)=>{
+                        if (evtCount == 0) {
+                            assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
+                        } else if (evtCount == 1) {
+                            assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:'sara'}));
+                            done();
+                        }
+                        evtCount++;
+                    });
+                    return sendCommand(cc, 'sp', '/users/2/name');
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                    return sendCommand(cc, 's', '/users/2/name', 'sara');
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                });
+            });
+
+            it('Should notify changes up', (done)=>{
+                var evtCount = 0;
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.connection.on('v',(pl)=>{
+                        if (evtCount == 0) {
+                            assert("right fetch payload", pl, is.object.matching({v:{0:is.object, 1:is.object, 2:is.object, 3:is.object}}));
+                        } else if (evtCount == 1) {
+                            assert("right update payload", pl, is.object.matching({p:'/users/2',v:{name:'simona',surname:'altrini'}}));
+                            done();
+                        }
+                        evtCount++;
+                    });
+                    return sendCommand(cc, 'sp', '/users');
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                    return sendCommand(cc, 's', '/users/2',{name:'simona',surname:'altrini'});
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                });
+            });
+
+            it('Should notify deletes up', (done)=>{
+                var evtCount = 0;
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.connection.on('v',(pl)=>{
+                        if (evtCount == 0) {
+                            assert("right fetch payload", pl, is.object.matching({v:{0:is.object, 1:is.object, 2:is.object, 3:is.object}}));
+                        } else if (evtCount == 1) {
+                            assert("right update payload", pl, is.object.matching({p:'/users/2',v:null}));
+                            done();
+                        }
+                        evtCount++;
+                    });
+                    return sendCommand(cc, 'sp', '/users');
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                    return sendCommand(cc, 's', '/users/2',null);
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                });
+            });
+
+            it('Should notify changes down to specific value', (done)=>{
+                var evtCount = 0;
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.connection.on('v',(pl)=>{
+                        if (evtCount == 0) {
+                            assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
+                        } else if (evtCount == 1) {
+                            assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:'simona'}));
+                            done();
+                        }
+                        evtCount++;
+                    });
+                    return sendCommand(cc, 'sp', '/users/2/name');
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                    return sendCommand(cc, 's', '/users/2',{name:'simona',surname:'altrini'});
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                });
+            });
+
+            it('Should notify of delete down to specific value', (done)=>{
+                var evtCount = 0;
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.connection.on('v',(pl)=>{
+                        if (evtCount == 0) {
+                            assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
+                        } else if (evtCount == 1) {
+                            assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:null}));
+                            done();
+                        }
+                        evtCount++;
+                    });
+                    return sendCommand(cc, 'sp', '/users/2/name');
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                    return sendCommand(cc, 's', '/users/2',null);
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                });
+            });
+
+            it('Should notify of delete of specific values', (done)=>{
+                var evtCount = 0;
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.connection.on('v',(pl)=>{
+                        if (evtCount == 0) {
+                            assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
+                        } else if (evtCount == 1) {
+                            assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:null}));
+                            done();
+                        }
+                        evtCount++;
+                    });
+                    return sendCommand(cc, 'sp', '/users/2/name');
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                    return sendCommand(cc, 's', '/users/2/name', null);
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                });
+            });
+
+            it('Should notify once', ()=>{
+                var evts :any[] = [];
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.connection.on('v',(pl)=>{
+                        evts.push(pl);
+                    });
+                    return Promise.all([
+                        sendCommand(cc, 'sp', '/users'),
+                        sendCommand(cc, 'sp', '/users/2'),
+                        sendCommand(cc, 'sp', '/users/2/addresses'),
+                        sendCommand(cc, 'sp', '/users/2/addresses/0'),
+                        sendCommand(cc, 'sp', '/users/2/addresses/0/name')
+                    ]);
+                }).then((ack)=>{
+                    return sendCommand(cc, 's', '/users/2/addresses', {0:{name:'office',line:'viale carso'}});
+                }).then((ack)=>{
+                    assert('acked correctly', ack, 'k');
+                    return wait(200);
+                }).then(()=>{
+                    // TODO sending the right optimized event is hard, so for now we send all the events
+                    assert("sent all the events", evts, is.array.withLength(10));
+                    /*
+                    assert("sent all the events", evts, is.array.withLength(6));
+                    var lst = evts[5];
+                    assert('update event is right', lst, is.object.matching({p:'/users/2/addresses/0/name',v:'office'}));
+                    */
+                });
             });
         });
 
-        it('should fetch a specific value', (done)=>{
-            return getConnectedClient().then((cc)=>{
-                cc.connection.on('v',(pl)=>{
-                    assert("right payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
-                    done();
-                });
-                return sendCommand(cc, 'sp', '/users/2/name');
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-            });
-        });
+        describe('Query >', ()=>{
 
-        it('Should notify of changes on a simple object', (done)=>{
-            var evtCount = 0;
-            var cc :ConnectedClient = null;
-            return getConnectedClient().then((ncc)=>{
-                cc = ncc;
-                cc.connection.on('v',(pl)=>{
-                    if (evtCount == 0) {
-                        assert("right fetch payload", pl, is.object.matching({p:'/users/2',v:{name:'simone',surname:'altro'}}));
-                    } else if (evtCount == 1) {
-                        assert("right update payload", pl, is.object.matching({p:'/users/2',v:{name:'simona',surname:'altrini'}}));
-                        done();
+            beforeEach(()=>{
+                return getConnectedClient().then((cc)=>{
+                    var vals :any[] = [];
+                    for (var i = 0; i < 10; i++) {
+                        vals[i] = { str: 'a'+i, num: i, invstr: 'a'+(99-i), invnum: 99-i, nest: {num:i}}
                     }
-                    evtCount++;
+                    return sendCommand(cc, 's', '/vals', vals);
                 });
-                return sendCommand(cc, 'sp', '/users/2');
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-                return sendCommand(cc, 's', '/users/2',{name:'simona',surname:'altrini'});
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
             });
-        });
 
-        it('Should notify of changes on specific value', (done)=>{
-            var evtCount = 0;
-            var cc :ConnectedClient = null;
-            return getConnectedClient().then((ncc)=>{
-                cc = ncc;
-                cc.connection.on('v',(pl)=>{
-                    if (evtCount == 0) {
-                        assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
-                    } else if (evtCount == 1) {
-                        assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:'sara'}));
-                        done();
+            it('Should find plain elements with query', ()=>{
+                return getConnectedClient().then((cc)=>{
+                    cc.eventCheck = checkEvents(cc.connection,
+                    [
+                        {
+                            event: 'v',
+                            match: is.object.matching({
+                                p: '/users/0',
+                                v: {
+                                    name: 'simone',
+                                    addresses: {
+                                        0: is.defined,
+                                        1: is.defined
+                                    }
+                                },
+                                q: 'q1',
+                                aft: null
+                            })
+                        }
+                        ,
+                        {
+                            event: 'v',
+                            match: is.object.matching({p:'/users/2', v:is.defined, q:'q1', aft: '/users/0'})
+                        }
+                        ,
+                        {
+                            event: 'v',
+                            match: is.object.matching({p:'/users/3', v:is.defined, q:'q1', aft: '/users/2'})
+                        }
+                        ,
+                        {
+                            event: 'qd',
+                            match: is.object.matching({q:'q1'})
+                        }
+                    ]);
+                    var def = {id:'q1',compareField:'name',equals:'simone',path:'/users'};
+                    var state = new SimpleQueryState(cc.handler, cc.broker, def);
+                    cc.broker.query(state);
+                    return cc.eventCheck;
+                });
+            });
+
+            it('Should return everything if unbounded', ()=>{
+                return getConnectedClient().then((cc)=>{
+                    var expect :SocketEvent[] = [];
+                    for (var i = 0; i < 10; i++) {
+                        var aft = null;
+                        if (i > 0) aft = '/vals/' + (i-1);
+                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft, q:'q1'})});
                     }
-                    evtCount++;
-                });
-                return sendCommand(cc, 'sp', '/users/2/name');
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-                return sendCommand(cc, 's', '/users/2/name', 'sara');
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-            });
-        });
+                    expect.push({event:'qd',match:is.defined});
 
-        it('Should notify changes up', (done)=>{
-            var evtCount = 0;
-            var cc :ConnectedClient = null;
-            return getConnectedClient().then((ncc)=>{
-                cc = ncc;
-                cc.connection.on('v',(pl)=>{
-                    if (evtCount == 0) {
-                        assert("right fetch payload", pl, is.object.matching({v:{0:is.object, 1:is.object, 2:is.object, 3:is.object}}));
-                    } else if (evtCount == 1) {
-                        assert("right update payload", pl, is.object.matching({p:'/users/2',v:{name:'simona',surname:'altrini'}}));
-                        done();
+                    cc.eventCheck = checkEvents(cc.connection, expect);
+                    var def = {id:'q1',path:'/vals'};
+                    var state = new SimpleQueryState(cc.handler, cc.broker, def);
+                    cc.broker.query(state);
+                    return cc.eventCheck;
+                //}).then((evts)=>{
+                //    console.log(evts);
+                });
+            });
+
+            it('Should sort correctly on number', ()=>{
+                return getConnectedClient().then((cc)=>{
+                    var expect :SocketEvent[] = [];
+                    for (var i = 9; i >= 0; i--) {
+                        var aft = null;
+                        if (i < 9) aft = '/vals/' + (i+1);
+                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft})});
                     }
-                    evtCount++;
-                });
-                return sendCommand(cc, 'sp', '/users');
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-                return sendCommand(cc, 's', '/users/2',{name:'simona',surname:'altrini'});
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-            });
-        });
+                    expect.push({event:'qd',match:is.defined});
 
-        it('Should notify deletes up', (done)=>{
-            var evtCount = 0;
-            var cc :ConnectedClient = null;
-            return getConnectedClient().then((ncc)=>{
-                cc = ncc;
-                cc.connection.on('v',(pl)=>{
-                    if (evtCount == 0) {
-                        assert("right fetch payload", pl, is.object.matching({v:{0:is.object, 1:is.object, 2:is.object, 3:is.object}}));
-                    } else if (evtCount == 1) {
-                        assert("right update payload", pl, is.object.matching({p:'/users/2',v:null}));
-                        done();
+                    cc.eventCheck = checkEvents(cc.connection, expect);
+                    var def = {id:'q1',compareField:'invnum',path:'/vals'};
+                    var state = new SimpleQueryState(cc.handler, cc.broker, def);
+                    cc.broker.query(state);
+                    return cc.eventCheck;
+                //}).then((evts)=>{
+                //    console.log(evts);
+                });
+            });
+
+            it('Should sort correctly on strings', ()=>{
+                return getConnectedClient().then((cc)=>{
+                    var expect :SocketEvent[] = [];
+                    for (var i = 9; i >= 0; i--) {
+                        var aft = null;
+                        if (i < 9) aft = '/vals/' + (i+1);
+                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft})});
                     }
-                    evtCount++;
-                });
-                return sendCommand(cc, 'sp', '/users');
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-                return sendCommand(cc, 's', '/users/2',null);
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-            });
-        });
+                    expect.push({event:'qd',match:is.defined});
 
-        it('Should notify changes down to specific value', (done)=>{
-            var evtCount = 0;
-            var cc :ConnectedClient = null;
-            return getConnectedClient().then((ncc)=>{
-                cc = ncc;
-                cc.connection.on('v',(pl)=>{
-                    if (evtCount == 0) {
-                        assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
-                    } else if (evtCount == 1) {
-                        assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:'simona'}));
-                        done();
+                    cc.eventCheck = checkEvents(cc.connection, expect);
+                    var def = {id:'q1',compareField:'invstr',path:'/vals'};
+                    var state = new SimpleQueryState(cc.handler, cc.broker, def);
+                    cc.broker.query(state);
+                    return cc.eventCheck;
+                //}).then((evts)=>{
+                //    console.log(evts);
+                });
+            });
+
+            it('Should limit results', ()=>{
+                return getConnectedClient().then((cc)=>{
+                    var expect :SocketEvent[] = [];
+                    for (var i = 0; i < 5; i++) {
+                        var aft = null;
+                        if (i > 0) aft = '/vals/' + (i-1);
+                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft, q:'q1'})});
                     }
-                    evtCount++;
-                });
-                return sendCommand(cc, 'sp', '/users/2/name');
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-                return sendCommand(cc, 's', '/users/2',{name:'simona',surname:'altrini'});
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-            });
-        });
+                    expect.push({event:'qd',match:is.defined});
 
-        it('Should notify of delete down to specific value', (done)=>{
-            var evtCount = 0;
-            var cc :ConnectedClient = null;
-            return getConnectedClient().then((ncc)=>{
-                cc = ncc;
-                cc.connection.on('v',(pl)=>{
-                    if (evtCount == 0) {
-                        assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
-                    } else if (evtCount == 1) {
-                        assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:null}));
-                        done();
+                    cc.eventCheck = checkEvents(cc.connection, expect);
+                    var def = {id:'q1',path:'/vals',limit:5};
+                    var state = new SimpleQueryState(cc.handler, cc.broker, def);
+                    cc.broker.query(state);
+                    return cc.eventCheck;
+                //}).then((evts)=>{
+                //    console.log(evts);
+                });
+            });
+
+            it('Should notify update of result in the query', ()=>{
+                var cc :ConnectedClient = null;
+                var extraMessage = false;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    var expect :SocketEvent[] = [];
+                    for (var i = 0; i < 5; i++) {
+                        var aft = null;
+                        if (i > 0) aft = '/vals/' + (i-1);
+                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft, q:'q1'})});
                     }
-                    evtCount++;
-                });
-                return sendCommand(cc, 'sp', '/users/2/name');
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-                return sendCommand(cc, 's', '/users/2',null);
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-            });
-        });
+                    expect.push({event:'qd',match:is.defined});
 
-        it('Should notify of delete of specific values', (done)=>{
-            var evtCount = 0;
-            var cc :ConnectedClient = null;
-            return getConnectedClient().then((ncc)=>{
-                cc = ncc;
-                cc.connection.on('v',(pl)=>{
-                    if (evtCount == 0) {
-                        assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
-                    } else if (evtCount == 1) {
-                        assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:null}));
-                        done();
-                    }
-                    evtCount++;
-                });
-                return sendCommand(cc, 'sp', '/users/2/name');
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-                return sendCommand(cc, 's', '/users/2/name', null);
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-            });
-        });
+                    cc.eventCheck = checkEvents(cc.connection, expect);
 
-        it('Should notify once', ()=>{
-            var evts :any[] = [];
-            var cc :ConnectedClient = null;
-            return getConnectedClient().then((ncc)=>{
-                cc = ncc;
-                cc.connection.on('v',(pl)=>{
-                    evts.push(pl);
+                    return sendCommand(cc, 'sq', {id:'q1',path:'/vals',limit:5});
+                }).then((ack)=>{
+                    assert("Got ack from the query", ack, 'k');
+                    return cc.eventCheck;
+                }).then((evts)=>{
+                    cc.eventCheck.stop();
+                    cc.eventCheck = checkEvents(cc.connection, [
+                        {event:'v', match: is.object.matching({p:'/vals/3/name',v:'simone'})}
+                    ]);
+                    return sendCommand(cc, 's', '/vals/3/name','simone');
+                }).then(()=>{
+                    return cc.eventCheck;
+                }).then((evts)=>{
+                    cc.eventCheck.stop();
+                    cc.connection.on('v', ()=>{
+                        extraMessage = true;
+                    });
+                    return sendCommand(cc, 's', '/vals/6/name','simone');
+                }).then(()=>{
+                    return wait(100);
+                }).then(()=>{
+                    assert("must not send a value object for objects outside the query", extraMessage, false);
                 });
-                return Promise.all([
-                    sendCommand(cc, 'sp', '/users'),
-                    sendCommand(cc, 'sp', '/users/2'),
-                    sendCommand(cc, 'sp', '/users/2/addresses'),
-                    sendCommand(cc, 'sp', '/users/2/addresses/0'),
-                    sendCommand(cc, 'sp', '/users/2/addresses/0/name')
-                ]);
-            }).then((ack)=>{
-                return sendCommand(cc, 's', '/users/2/addresses', {0:{name:'office',line:'viale carso'}});
-            }).then((ack)=>{
-                assert('acked correctly', ack, 'k');
-                return wait(200);
-            }).then(()=>{
-                // TODO sending the right optimized event is hard, so for now we send all the events
-                assert("sent all the events", evts, is.array.withLength(10));
-                /*
-                assert("sent all the events", evts, is.array.withLength(6));
-                var lst = evts[5];
-                assert('update event is right', lst, is.object.matching({p:'/users/2/addresses/0/name',v:'office'}));
-                */
             });
-        });
 
+            it('Should notify of query entry/exit on equals condition change on set', ()=>{
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.eventCheck = checkEvents(cc.connection,
+                    [
+                        {
+                            event: 'v',
+                            match: is.object.matching({
+                                p: '/users/1',
+                                v: {
+                                    name: 'sara',
+                                },
+                                q: 'q1',
+                                aft: null
+                            })
+                        }
+                    ]);
+                    return sendCommand(cc, 'sq', {id:'q1',path:'/users',compareField:'name',equals:'sara'});
+                }).then((ack)=>{
+                    assert("Got ack from the query", ack, 'k');
+                    return cc.eventCheck;
+                }).then((evts)=>{
+                    cc.eventCheck.stop();
+                    cc.eventCheck = checkEvents(cc.connection, [
+                        {event:'v', match: is.object.matching({p:'/users/2',v:{name:'sara'},q:'q1'})}
+                    ]);
+                    return sendCommand(cc, 's', '/users/2', {name:'sara'});
+                }).then(()=>{
+                    return cc.eventCheck;
+                }).then((evts)=>{
+                    cc.eventCheck.stop();
+                    cc.eventCheck = checkEvents(cc.connection, [
+                        {event:'qx', match: is.object.matching({p:'/users/2',q:'q1'})}
+                    ]);
+                    return sendCommand(cc, 's', '/users/2', {name:'simone'});
+                }).then(()=>{
+                    return cc.eventCheck;
+                });
+            });
+
+            it('Should notify of query entry/exit on equals condition change on nested set', ()=>{
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.eventCheck = checkEvents(cc.connection,
+                    [
+                        {
+                            event: 'v',
+                            match: is.object.matching({
+                                p: '/users/1',
+                                v: {
+                                    name: 'sara',
+                                },
+                                q: 'q1',
+                                aft: null
+                            })
+                        }
+                    ]);
+                    return sendCommand(cc, 'sq', {id:'q1',path:'/users',compareField:'name',equals:'sara'});
+                }).then((ack)=>{
+                    assert("Got ack from the query", ack, 'k');
+                    return cc.eventCheck;
+                }).then((evts)=>{
+                    cc.eventCheck.stop();
+                    cc.eventCheck = checkEvents(cc.connection, [
+                        {event:'v', match: is.object.matching({p:'/users/2',v:{name:'sara'},q:'q1'})}
+                    ]);
+                    return sendCommand(cc, 's', '/users/2/name', 'sara');
+                }).then(()=>{
+                    return cc.eventCheck;
+                }).then((evts)=>{
+                    cc.eventCheck.stop();
+                    cc.eventCheck = checkEvents(cc.connection, [
+                        {event:'qx', match: is.object.matching({p:'/users/2',q:'q1'})}
+                    ]);
+                    return sendCommand(cc, 's', '/users/2/name', 'simone');
+                }).then(()=>{
+                    return cc.eventCheck;
+                });
+            });
+
+            // TODO check notification on change
+
+            // TODO check entry/exit on range and limit
+
+
+        });
     });
-
-    /*
-    it('Should subscribe a handler', (done)=>{
-        getConnectedClient().then((cc)=>{
-            cc.connection.emit('sp','/testData', (resp)=>{
-                assert("responded to the subscribe", resp, 'k');
-                assert("subscription is there",cc.broker.subscriptions,
-                    is.object.matching(
-                        {'/testData':is.object.withKeys(cc.connection.id)}
-                    )
-                );
-                done();
-            });
-        });
-    });
-    */
 });
 
 

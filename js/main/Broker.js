@@ -1,15 +1,22 @@
+var __extends = (this && this.__extends) || function (d, b) {
+    for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
+    function __() { this.constructor = d; }
+    d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+};
 (function (factory) {
     if (typeof module === 'object' && typeof module.exports === 'object') {
         var v = factory(require, exports); if (v !== undefined) module.exports = v;
     }
     else if (typeof define === 'function' && define.amd) {
-        define(["require", "exports", 'mongodb', 'debug'], factory);
+        define(["require", "exports", 'mongodb', 'debug', './Utils'], factory);
     }
 })(function (require, exports) {
     "use strict";
     var Mongo = require('mongodb');
     var Debug = require('debug');
+    var Utils = require('./Utils');
     var dbgBroker = Debug('tsdb:mongo:broker');
+    var dbgQuery = Debug('tsdb:mongo:query');
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
@@ -191,7 +198,7 @@
             delete this.handlers[handler.id];
         };
         Broker.prototype.subscribe = function (handler, path) {
-            path = Broker.normalizePath(path);
+            path = Utils.normalizePath(path);
             var ps = this.subscriptions[path];
             if (!ps) {
                 this.subscriptions[path] = ps = {};
@@ -199,7 +206,7 @@
             ps[handler.id] = handler;
         };
         Broker.prototype.unsubscribe = function (handler, path) {
-            path = Broker.normalizePath(path);
+            path = Utils.normalizePath(path);
             var ps = this.subscriptions[path];
             if (!ps)
                 return;
@@ -213,7 +220,7 @@
         Broker.prototype.broadcast = function (path, val) {
             var alreadySent = {};
             this.broadcastDown(path, val, alreadySent);
-            this.broadcastUp(Broker.parentPath(path), val, path, alreadySent);
+            this.broadcastUp(Utils.parentPath(path), val, path, alreadySent);
         };
         Broker.prototype.broadcastDown = function (path, val, alreadySent) {
             if (val == null) {
@@ -231,11 +238,12 @@
             this.broadcastToHandlers(path, val, alreadySent);
         };
         Broker.prototype.broadcastUp = function (path, val, fullpath, alreadySent) {
+            if (!path)
+                return;
             this.broadcastToHandlers(path, val, alreadySent, fullpath);
             if (path.length == 0)
                 return;
-            path = Broker.parentPath(path);
-            this.broadcastUp(path, val, fullpath, alreadySent);
+            this.broadcastUp(Utils.parentPath(path), val, fullpath, alreadySent);
         };
         Broker.prototype.broadcastToHandlers = function (path, val, alreadySent, fullpath) {
             var ps = this.subscriptions[path];
@@ -277,46 +285,40 @@
             }
             return Promise.all(proms);
         };
-        Broker.normalizePath = function (path) {
-            path = path.replace(/\/\.+\//g, '/');
-            path = path.replace(/\/\/+/g, '/');
-            if (path.charAt(0) != '/')
-                path = '/' + path;
-            if (path.charAt(path.length - 1) == '/')
-                path = path.substr(0, path.length - 1);
-            return path;
-        };
-        Broker.leafPath = function (path) {
-            return path.substr(path.lastIndexOf('/') + 1);
-        };
-        Broker.parentPath = function (path) {
-            return path.substr(0, path.lastIndexOf('/'));
-        };
-        Broker.pathRegexp = function (path) {
-            path = path.replace(/[\-\[\]\/\{\}\(\)\*\+\?\.\\\^\$\|]/g, "\\$&");
-            return new RegExp('^' + path + '.*');
-        };
         Broker.prototype.del = function (handler, paths) {
             var ops = [];
             for (var i = 0; i < paths.length; i++) {
                 ops[i] = {
                     deleteMany: {
                         filter: {
-                            _id: Broker.pathRegexp(paths[i])
+                            _id: Utils.pathRegexp(paths[i])
                         }
                     }
                 };
             }
             return this.collection.bulkWrite(ops);
         };
+        Broker.prototype.merge = function (handler, path, val) {
+            path = Utils.normalizePath(path);
+            var proms = [];
+            for (var k in val) {
+                if (val[k] == null) {
+                    proms.push(this.set(handler, path + '/' + k, null));
+                }
+                else {
+                    proms.push(this.set(handler, path + '/' + k, val[k]));
+                }
+            }
+            return Promise.all(proms);
+        };
         Broker.prototype.set = function (handler, path, val) {
             var _this = this;
-            path = Broker.normalizePath(path);
+            path = Utils.normalizePath(path);
             if (val === null) {
-                var leaf = Broker.leafPath(path);
+                var leaf = Utils.leafPath(path);
                 if (!leaf)
                     throw new Error('Cannot write a primitive value on root');
-                var par = Broker.parentPath(path);
+                var par = Utils.parentPath(path);
                 dbgBroker("Unsetting %s -> %s", par, leaf);
                 var obj = {};
                 obj[leaf] = 1;
@@ -327,10 +329,10 @@
             }
             if (typeof val == 'string' || typeof val == 'number' || typeof val == 'boolean') {
                 // Saving a primitive value
-                var leaf = Broker.leafPath(path);
+                var leaf = Utils.leafPath(path);
                 if (!leaf)
                     throw new Error('Cannot write a primitive value on root');
-                var par = Broker.parentPath(path);
+                var par = Utils.parentPath(path);
                 dbgBroker("Setting %s -> %s = %s", par, leaf, val);
                 var obj = {};
                 obj[leaf] = val;
@@ -339,7 +341,7 @@
                     this.collection.updateOne({ _id: par }, { $set: obj }, { upsert: true })
                 ]);
             }
-            return this.collection.find({ _id: Broker.pathRegexp(path) }).sort({ _id: 1 }).toArray().then(function (pres) {
+            return this.collection.find({ _id: Utils.pathRegexp(path) }).sort({ _id: 1 }).toArray().then(function (pres) {
                 var premap = {};
                 for (var i = 0; i < pres.length; i++) {
                     var pre = pres[i];
@@ -347,8 +349,7 @@
                 }
                 // Saving a complex object
                 var unrolled = [];
-                var deletes = [];
-                _this.recursiveUnroll(path, val, unrolled, deletes);
+                _this.recursiveUnroll(path, val, unrolled);
                 if (unrolled.length == 0) {
                     dbgBroker("Nothing to write in path %s with val %o", path, val);
                     return Promise.resolve();
@@ -382,12 +383,13 @@
             var atlo = false;
             for (var k in val) {
                 var subv = val[k];
+                if (subv == null) {
+                    dels.push(path + '/' + k);
+                    continue;
+                }
                 if (typeof (subv) == 'function' || typeof (subv) == 'object') {
                     this.recursiveUnroll(path + '/' + k, subv, writes, dels);
                     continue;
-                }
-                if (subv === null) {
-                    dels.push(path + '/' + k);
                 }
                 atlo = true;
                 myobj[k] = val[k];
@@ -396,28 +398,41 @@
                 writes.push(myobj);
             }
         };
-        Broker.prototype.fetch = function (handler, path) {
+        Broker.prototype.fetch = function (handler, path, extra) {
             var _this = this;
             dbgBroker('Fetching %s for %s', path, handler.id);
-            path = Broker.normalizePath(path);
-            this.collection
-                .find({ _id: Broker.pathRegexp(path) }).sort({ _id: 1 })
+            path = Utils.normalizePath(path);
+            return this.collection
+                .find({ _id: Utils.pathRegexp(path) }).sort({ _id: 1 })
                 .toArray()
                 .then(function (data) {
                 if (data.length != 0) {
                     dbgBroker("Found %s bag objects to recompose", data.length);
-                    _this.stream(handler, path, data);
+                    // TODO consider streaming data progressively
+                    /*
+                    to be exact :
+                    - while looping on data
+                    - if we pass from one child to another child
+                    - if the child is not a native, switch to "streaming" mode
+                    - in streaming mode, send a separate value event for each child
+                    */
+                    // recompose the object and send it
+                    var recomposer = new Recomposer(path);
+                    for (var i = 0; i < data.length; i++) {
+                        recomposer.add(data[i]);
+                    }
+                    handler.sendValue(path, recomposer.get(), extra);
                     return;
                 }
-                _this.collection.findOne({ _id: Broker.parentPath(path) }).then(function (val) {
+                _this.collection.findOne({ _id: Utils.parentPath(path) }).then(function (val) {
                     if (val == null) {
                         dbgBroker("Found no value on parent path");
-                        handler.sendValue(path, null);
+                        handler.sendValue(path, null, extra);
                     }
                     else {
-                        var leaf = Broker.leafPath(path);
+                        var leaf = Utils.leafPath(path);
                         dbgBroker("Found %s on parent path", val[leaf]);
-                        handler.sendValue(path, val[leaf]);
+                        handler.sendValue(path, val[leaf], extra);
                     }
                 });
             })
@@ -426,17 +441,305 @@
                 // TODO handle this errors differently
             });
         };
-        Broker.prototype.stream = function (handler, path, data) {
-            // recompose the object and send it
-            var recomposer = new Recomposer(path);
-            for (var i = 0; i < data.length; i++) {
-                recomposer.add(data[i]);
+        Broker.prototype.query = function (queryState) {
+            var qo = {};
+            var def = queryState.def;
+            qo._id = queryState.pathRegex;
+            if (def.compareField) {
+                var leafField = Utils.leafPath(def.compareField);
+                if (typeof (def.equals) !== 'undefined') {
+                    qo[leafField] = def.equals;
+                }
+                else if (typeof (def.from) !== 'undefined' || typeof (def.to) !== 'undefined') {
+                    qo[leafField] = {};
+                    if (typeof (def.from) !== 'undefined')
+                        qo[leafField].$gt = def.from;
+                    if (typeof (def.to) !== 'undefined')
+                        qo[leafField].$lt = def.to;
+                }
             }
-            handler.sendValue(path, recomposer.get());
+            dbgBroker("Query object %o", qo);
+            var cursor = this.collection.find(qo);
+            var sortobj = {};
+            if (def.compareField && typeof (def.equals) == 'undefined') {
+                sortobj[def.compareField] = def.limitLast ? -1 : 1;
+            }
+            else {
+                sortobj['_id'] = def.limitLast ? -1 : 1;
+            }
+            cursor = cursor.sort(sortobj);
+            if (def.limit) {
+                cursor = cursor.limit(def.limit);
+            }
+            //return cursor.toArray().then((data)=>console.log(data));
+            cursor = cursor.stream();
+            cursor.on('data', function (data) {
+                var elementUrl = Utils.limitToChild(data._id, def.path);
+                queryState.found(elementUrl, data);
+            });
+            cursor.on('end', function () {
+                queryState.foundEnd();
+                console.log('done!');
+            });
         };
         return Broker;
     }());
     exports.Broker = Broker;
+    var ForwardingSubscriber = (function () {
+        function ForwardingSubscriber(id, from, to) {
+            this.id = id;
+            this.from = from;
+            this.to = to;
+        }
+        Object.defineProperty(ForwardingSubscriber.prototype, "closed", {
+            get: function () {
+                return this.from.closed || this.to.closed;
+            },
+            enumerable: true,
+            configurable: true
+        });
+        ForwardingSubscriber.prototype.sendValue = function (path, val, extra) {
+            this.to.sendValue(path, val, extra);
+        };
+        return ForwardingSubscriber;
+    }());
+    var SortAwareForwardingSubscriber = (function (_super) {
+        __extends(SortAwareForwardingSubscriber, _super);
+        function SortAwareForwardingSubscriber() {
+            _super.apply(this, arguments);
+            this.sorting = true;
+            this.sent = {};
+            this.cached = {};
+            this.cachedUpd = {};
+        }
+        SortAwareForwardingSubscriber.prototype.sendValue = function (path, val, extra) {
+            if (!this.sorting) {
+                _super.prototype.sendValue.call(this, path, val, extra);
+                return;
+            }
+            if (!extra.q) {
+                // Not part of the query, it's probably an update
+                var upcache = this.cachedUpd[path];
+                if (!upcache) {
+                    upcache = [];
+                    this.cachedUpd[path] = upcache;
+                }
+                upcache.push({ p: path, v: val, e: extra });
+            }
+            else if (extra.aft) {
+                if (this.sent[extra.aft]) {
+                    this.forward(path, val, extra);
+                }
+                else {
+                    dbgBroker("Caching %s cause %s not yet sent", path, extra.aft);
+                    this.cached[extra.aft] = { p: path, v: val, e: extra };
+                }
+            }
+            else {
+                this.forward(path, val, extra);
+            }
+        };
+        SortAwareForwardingSubscriber.prototype.forward = function (path, val, extra) {
+            this.sent[path] = true;
+            _super.prototype.sendValue.call(this, path, val, extra);
+            var upcache = this.cachedUpd[path];
+            if (upcache) {
+                dbgBroker("Sending cached updates to %s", path);
+                for (var i = 0; i < upcache.length; i++) {
+                    var incache = upcache[i];
+                    _super.prototype.sendValue.call(this, incache.p, incache.v, incache.e);
+                }
+            }
+            incache = this.cached[path];
+            if (!incache)
+                return;
+            delete this.cached[path];
+            dbgBroker("Sending %s cause %s now is sent", incache.p, path);
+            this.forward(incache.p, incache.v, incache.e);
+        };
+        SortAwareForwardingSubscriber.prototype.stopSorting = function () {
+            dbgBroker("Stop sorting and flushing cache");
+            // Flush anything still in cache
+            var ks = Object.getOwnPropertyNames(this.cached);
+            for (var i = 0; i < ks.length; i++) {
+                var k = ks[i];
+                var incache = this.cached[k];
+                if (!incache)
+                    continue;
+                delete this.cached[k];
+                this.forward(incache.p, incache.v, incache.e);
+            }
+            // Clear cache and sent
+            this.cached = null;
+            this.cachedUpd = null;
+            this.sent = null;
+            this.sorting = false;
+        };
+        return SortAwareForwardingSubscriber;
+    }(ForwardingSubscriber));
+    var SimpleQueryState = (function () {
+        function SimpleQueryState(handler, broker, def) {
+            /**
+             * path->sort value
+             */
+            this.invalues = [];
+            this.closed = false;
+            this.forwarder = null;
+            this._pathRegex = null;
+            this.fetchingCnt = 0;
+            this.fetchEnded = false;
+            this.handler = handler;
+            this.broker = broker;
+            this.def = def;
+            this.forwarder = new SortAwareForwardingSubscriber(this.id + "fwd", this, this.handler);
+        }
+        Object.defineProperty(SimpleQueryState.prototype, "id", {
+            get: function () {
+                return this.def.id;
+            },
+            enumerable: true,
+            configurable: true
+        });
+        Object.defineProperty(SimpleQueryState.prototype, "pathRegex", {
+            get: function () {
+                if (!this._pathRegex) {
+                    var def = this.def;
+                    // Limit to the path, and if needed subpath
+                    var subp = null;
+                    if (def.compareField) {
+                        subp = Utils.parentPath(def.compareField);
+                    }
+                    subp = subp || '';
+                    dbgBroker("Subpath %s", subp);
+                    var path = def.path;
+                    this._pathRegex = Utils.pathRegexp(path, subp);
+                }
+                return this._pathRegex;
+            },
+            enumerable: true,
+            configurable: true
+        });
+        SimpleQueryState.prototype.positionFor = function (val) {
+            for (var i = 0; i < this.invalues.length; i++) {
+                if (this.invalues[i].value > val)
+                    return i;
+            }
+            return this.invalues.length;
+        };
+        /**
+         * Start the query, subscribing where needed
+         */
+        SimpleQueryState.prototype.start = function () {
+            this.broker.query(this);
+            this.broker.subscribe(this, this.def.path);
+        };
+        SimpleQueryState.prototype.stop = function () {
+            this.closed = true;
+            this.broker.unsubscribe(this, this.def.path);
+            for (var k in this.invalues) {
+                this.broker.unsubscribe(this, k);
+                this.broker.unsubscribe(this.forwarder, k);
+            }
+        };
+        SimpleQueryState.prototype.found = function (path, data) {
+            var _this = this;
+            var ind = this.invalues.length;
+            var eleVal = null;
+            if (this.def.compareField) {
+                eleVal = data[Utils.leafPath(this.def.compareField)];
+            }
+            else {
+                eleVal = Utils.leafPath(path);
+            }
+            ind = this.positionFor(eleVal);
+            //dbgBroker("For element %s the sort value is %s and the position %s", path, eleVal, ind);
+            var prePath = null;
+            if (ind)
+                prePath = this.invalues[ind - 1].path;
+            this.invalues.splice(ind, 0, { path: path, value: eleVal });
+            this.fetchingCnt++;
+            this.broker.subscribe(this.forwarder, path);
+            this.broker.fetch(this.forwarder, path, { q: this.id, aft: prePath }).then(function () {
+                _this.fetchingCnt--;
+                if (_this.fetchingCnt == 0 && _this.fetchEnded) {
+                    _this.forwarder.stopSorting();
+                    _this.handler.queryFetchEnd(_this.id);
+                }
+            });
+        };
+        SimpleQueryState.prototype.exited = function (path, ind) {
+            this.handler.queryExit(path, this.id);
+            this.broker.unsubscribe(this.forwarder, path);
+            if (typeof (ind) == 'undefined') {
+                for (var i = 0; i < this.invalues.length; i++) {
+                    if (this.invalues[i].path == path) {
+                        ind = i;
+                        break;
+                    }
+                }
+            }
+            this.invalues.splice(ind, 1);
+        };
+        SimpleQueryState.prototype.foundEnd = function () {
+            this.fetchEnded = true;
+        };
+        SimpleQueryState.prototype.checkExit = function (path) {
+            for (var i = 0; i < this.invalues.length; i++) {
+                if (this.invalues[i].path == path) {
+                    this.exited(path, i);
+                    return;
+                }
+            }
+        };
+        SimpleQueryState.prototype.sendValue = function (path, val, extra) {
+            var extra = {};
+            _a = Utils.normalizeUpdatedValue(path, val), path = _a[0], val = _a[1];
+            dbgQuery("%s : Evaluating %s from modifications in %s in %s", this.id, path, val, this.pathRegex);
+            // Check if this makes a difference for the query in-out, find the value of the compareField
+            if (path.match(this.pathRegex)) {
+                dbgQuery("Matched");
+                if (this.def.compareField) {
+                    var eleVal = val[Utils.leafPath(this.def.compareField)];
+                }
+                else {
+                    eleVal = Utils.leafPath(path);
+                }
+                // Check if the value is in the acceptable range
+                if (typeof (this.def.equals) !== 'undefined') {
+                    if (this.def.equals != eleVal)
+                        return this.checkExit(path);
+                }
+                else if (typeof (this.def.from) !== 'undefined') {
+                    if (eleVal < this.def.from)
+                        return this.checkExit(path);
+                }
+                else if (typeof (this.def.to) !== 'undefined') {
+                    if (eleVal > this.def.to)
+                        return this.checkExit(path);
+                }
+                var pos = this.positionFor(eleVal);
+                if (this.def.limit) {
+                    // If the position is over the limit we can discard this
+                    if (pos >= this.def.limit)
+                        return this.checkExit(path);
+                }
+                // We have a new value to insert
+                this.invalues.splice(pos, 0, { path: path, value: eleVal });
+                var prePath = null;
+                if (pos)
+                    prePath = this.invalues[pos - 1].path;
+                this.broker.fetch(this.forwarder, path, { q: this.id, aft: prePath });
+                if (this.def.limit) {
+                    // Check who went out
+                    var ele = this.invalues[this.invalues.length - 1];
+                    this.exited(ele.path, this.invalues.length);
+                }
+            }
+            var _a;
+        };
+        return SimpleQueryState;
+    }());
+    exports.SimpleQueryState = SimpleQueryState;
     // Does not need to export, but there are no friendly/package/module accessible methods, and Broker.subscribe will complain is Handler is private
     var Handler = (function () {
         function Handler(socket, authData, broker) {
@@ -447,11 +750,15 @@
             this.id = 'na';
             this.closed = false;
             this.pathSubs = {};
+            this.queries = {};
             this.id = socket.id.substr(2);
             socket.on('sp', function (path, fn) { return fn(_this.subscribePath(path)); });
             socket.on('up', function (path, fn) { return fn(_this.unsubscribePath(path)); });
             socket.on('pi', function (id, fn) { return fn(_this.ping(id)); });
+            socket.on('sq', function (def, fn) { return fn(_this.subscribeQuery(def)); });
+            socket.on('uq', function (id, fn) { return fn(_this.unsubscribeQuery(id)); });
             socket.on('s', function (path, val, fn) { return _this.set(path, val, fn); });
+            socket.on('m', function (path, val, fn) { return _this.merge(path, val, fn); });
             socket.on('disconnect', function () {
                 _this.close();
             });
@@ -467,6 +774,9 @@
             this.socket = null;
             for (var k in this.pathSubs) {
                 this.broker.unsubscribe(this, k);
+            }
+            for (var k in this.queries) {
+                this.queries[k].stop();
             }
             // TODO stop ongoing fetch operations?
             this.broker.unregister(this);
@@ -494,6 +804,28 @@
             this.broker.unsubscribe(this, path);
             return 'k';
         };
+        Handler.prototype.subscribeQuery = function (def) {
+            if (this.queries[def.id]) {
+                dbgHandler("%s was already subscribed to query %s", this.id, def.id);
+                return 'k';
+            }
+            dbgHandler("%s subscribing query to %s", this.id, def.path);
+            var state = new SimpleQueryState(this, this.broker, def);
+            this.queries[def.id] = state;
+            state.start();
+            return 'k';
+        };
+        Handler.prototype.unsubscribeQuery = function (id) {
+            var state = this.queries[id];
+            if (!state) {
+                dbgHandler("%s was already unsubscribed from query %s", this.id, id);
+                return 'k';
+            }
+            dbgHandler("%s unsubscribing from query %s", this.id, id);
+            state.stop();
+            delete this.queries[id];
+            return 'k';
+        };
         Handler.prototype.ping = function (id) {
             dbgHandler("%s received ping %s", this.id, id);
             return id;
@@ -506,9 +838,28 @@
                 // TODO how to handle errors?
             });
         };
-        Handler.prototype.sendValue = function (path, val) {
+        Handler.prototype.merge = function (path, val, cb) {
+            dbgHandler("%s merging in %s %o", this.id, path, val);
+            // TODO security here
+            this.broker.merge(this, path, val).then(function () { return cb('k'); }).catch(function (e) {
+                dbgHandler("Got error", e);
+                // TODO how to handle errors?
+            });
+        };
+        Handler.prototype.sendValue = function (path, val, extra) {
+            // TODO evaluate query matching
             // TODO security filter here?
-            this.socket.emit('v', { p: path, v: val });
+            var msg = { p: path, v: val };
+            for (var k in extra) {
+                msg[k] = extra[k];
+            }
+            this.socket.emit('v', msg);
+        };
+        Handler.prototype.queryFetchEnd = function (queryId) {
+            this.socket.emit('qd', { q: queryId });
+        };
+        Handler.prototype.queryExit = function (path, queryId) {
+            this.socket.emit('qx', { q: queryId, p: path });
         };
         return Handler;
     }());
@@ -516,7 +867,7 @@
     var Recomposer = (function () {
         function Recomposer(base) {
             this.refs = {};
-            this.base = Broker.normalizePath(base);
+            this.base = Utils.normalizePath(base);
         }
         Recomposer.prototype.add = function (obj) {
             var path = obj._id;
@@ -542,8 +893,8 @@
             }
             if (path == this.base)
                 return;
-            var par = Broker.parentPath(path);
-            var lst = Broker.leafPath(path);
+            var par = Utils.parentPath(path);
+            var lst = Utils.leafPath(path);
             var preobj = {};
             preobj[lst] = acref;
             this.findOrCreateRefFor(par, preobj);
