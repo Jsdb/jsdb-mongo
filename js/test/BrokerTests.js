@@ -11,6 +11,8 @@ var tsMatchers_1 = require('tsmatchers/js/main/tsMatchers');
 var mongoUrl = 'mongodb://localhost:27017/';
 var socketURL = 'http://0.0.0.0:5000';
 var socketServer;
+var localSocket;
+var useLocalSocket = true;
 var lastBroker;
 function getBroker() {
     var proms = [];
@@ -18,7 +20,12 @@ function getBroker() {
         proms.push(lastBroker.close());
     if (socketServer)
         socketServer.close();
-    socketServer = SocketIO.listen(5000);
+    if (!useLocalSocket) {
+        socketServer = SocketIO.listen(5000);
+    }
+    else {
+        socketServer = null;
+    }
     var brk = new Broker_1.Broker(socketServer, mongoUrl + 'test', 'bag1', mongoUrl + 'local');
     lastBroker = brk;
     proms.push(brk.start());
@@ -31,20 +38,32 @@ var lastConn;
 function getConnection() {
     if (lastConn)
         lastConn.close();
-    var socketOptions = {
-        transports: ['websocket'],
-        'force new connection': true
-    };
-    return lastConn = SocketClient.connect(socketURL, socketOptions);
+    if (useLocalSocket) {
+        localSocket = new Broker_1.LocalSocket();
+        lastBroker.handle(localSocket.server, null);
+        return localSocket.client;
+    }
+    else {
+        var socketOptions = {
+            transports: ['websocket'],
+            'force new connection': true
+        };
+        return lastConn = SocketClient.connect(socketURL, socketOptions);
+    }
 }
 function getConnectedClient() {
     return getBroker().then(function (brk) {
         var conn = getConnection();
         return new Promise(function (res, rej) {
+            var done = false;
             conn.on('aa', function () {
+                if (done)
+                    return;
+                done = true;
                 var hnd = brk.handlers[conn.id];
                 res({ broker: brk, connection: conn, handler: hnd });
             });
+            conn.emit('aa');
         });
     });
 }
@@ -123,7 +142,7 @@ function checkEvents(conn, events, anyOrder) {
     });
     cp.stop = function () {
         for (var k in cbs) {
-            conn.off(k, cbs[k]);
+            conn.removeListener(k, cbs[k]);
         }
     };
     return cp;
@@ -164,6 +183,36 @@ describe("Broker >", function () {
                         done();
                     });
                 });
+                conn.emit('aa');
+            });
+        });
+        describe('Local socket >', function () {
+            it('Should send and receive', function () {
+                var sock = new Broker_1.LocalSocket();
+                tsmatchers_1.assert("Has same id", sock.server.id.substr(2), sock.client.id);
+                var clrecv = [];
+                var srrecv = [];
+                sock.client.on('test1', function (val) { return clrecv.push('test1:' + val); });
+                sock.client.on('test2', function (val) { return clrecv.push('test2:' + val); });
+                sock.server.on('test1', function (val) { return srrecv.push('test1:' + val); });
+                sock.server.on('test2', function (val) { return srrecv.push('test2:' + val); });
+                sock.client.emit('test1', 'ciao');
+                sock.server.emit('test1', 'come va');
+                sock.client.emit('test2', 'ok');
+                tsmatchers_1.assert("Server received messages", srrecv, tsmatchers_1.is.array.equals(['test1:ciao', 'test2:ok']));
+                tsmatchers_1.assert("Client received messages", clrecv, tsmatchers_1.is.array.equals(['test1:come va']));
+            });
+            it('Should obey callbacks', function () {
+                var sock = new Broker_1.LocalSocket();
+                sock.client.on('test1', function (val, cb) {
+                    tsmatchers_1.assert("There is a callback", cb, tsmatchers_1.is.function);
+                    cb('kk');
+                });
+                var got = null;
+                sock.server.emit('test1', 'ciao', function (resp) {
+                    got = resp;
+                });
+                tsmatchers_1.assert("got reponse", got, 'kk');
             });
         });
     });
@@ -526,27 +575,34 @@ describe("Broker >", function () {
                     tsmatchers_1.assert("has event for phone:iphone", evts, tsmatchers_1.is.array.containing(tsmatchers_1.is.object.matching({ p: '/users/2/phone', v: 'iphone' })));
                 });
             });
-            it('Should notify of changes on specific value', function (done) {
+            it('Should notify of changes on specific value', function () {
                 var evtCount = 0;
                 var cc = null;
+                var pkprom = null;
                 return getConnectedClient().then(function (ncc) {
                     cc = ncc;
                     cc.connection.on('v', function (pl) {
+                        console.log('in on(v) ' + evtCount);
+                        pkprom.resolve();
                         if (evtCount == 0) {
                             tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simone' }));
                         }
                         else if (evtCount == 1) {
                             tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'sara' }));
-                            done();
                         }
                         evtCount++;
                     });
+                    pkprom = extPromise();
                     return sendCommand(cc, 'sp', '/users/2/name');
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
+                    return pkprom;
+                }).then(function () {
+                    pkprom = extPromise();
                     return sendCommand(cc, 's', '/users/2/name', 'sara');
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
+                    return pkprom;
                 });
             });
             it('Should notify changes up', function (done) {
@@ -618,50 +674,61 @@ describe("Broker >", function () {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
                 });
             });
-            it('Should notify of delete down to specific value', function (done) {
+            it('Should notify of delete down to specific value', function () {
                 var evtCount = 0;
                 var cc = null;
+                var pkprom = null;
                 return getConnectedClient().then(function (ncc) {
                     cc = ncc;
                     cc.connection.on('v', function (pl) {
+                        pkprom.resolve();
                         if (evtCount == 0) {
                             tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simone' }));
                         }
                         else if (evtCount == 1) {
                             tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: null }));
-                            done();
                         }
                         evtCount++;
                     });
+                    pkprom = extPromise();
                     return sendCommand(cc, 'sp', '/users/2/name');
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
+                    return pkprom;
+                }).then(function () {
+                    pkprom = extPromise();
                     return sendCommand(cc, 's', '/users/2', null);
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
+                    return pkprom;
                 });
             });
-            it('Should notify of delete of specific values', function (done) {
+            it('Should notify of delete of specific values', function () {
                 var evtCount = 0;
                 var cc = null;
+                var pkprom = null;
                 return getConnectedClient().then(function (ncc) {
                     cc = ncc;
                     cc.connection.on('v', function (pl) {
+                        pkprom.resolve();
                         if (evtCount == 0) {
                             tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simone' }));
                         }
                         else if (evtCount == 1) {
                             tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: null }));
-                            done();
                         }
                         evtCount++;
                     });
                     return sendCommand(cc, 'sp', '/users/2/name');
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
+                    return pkprom;
+                }).then(function () {
+                    pkprom = extPromise();
                     return sendCommand(cc, 's', '/users/2/name', null);
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
+                    return pkprom;
                 });
             });
             it('Should notify once', function () {
@@ -943,6 +1010,19 @@ function wait(to) {
     return new Promise(function (res, rej) {
         setTimeout(function () { return res(null); }, to);
     });
+}
+function extPromise() {
+    var extres = null;
+    var extrej = null;
+    var prom = new Promise(function (res, rej) {
+        extres = res;
+        extrej = rej;
+    });
+    prom.resolve = function (val) {
+        extres(val);
+    };
+    prom.reject = function (err) { return extrej(err); };
+    return prom;
 }
 
 //# sourceMappingURL=BrokerTests.js.map

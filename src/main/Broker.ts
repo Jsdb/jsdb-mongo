@@ -1,8 +1,14 @@
+/**
+ * TSDB Mongo VERSION_TAG
+ */
+
 import * as SocketIO from 'socket.io';
 import * as Mongo from 'mongodb';
 import * as Debug from 'debug';
 
 import * as Utils from './Utils';
+
+import {EventEmitter} from 'events';
 
 var dbgBroker = Debug('tsdb:mongo:broker');
 var dbgQuery = Debug('tsdb:mongo:query');
@@ -10,18 +16,27 @@ var dbgOplog = Debug('tsdb:mongo:oplog');
 var dbgSocket = Debug('tsdb:mongo:socket');
 var dbgHandler = Debug('tsdb:mongo:handler');
 
+export var VERSION = "VERSION_TAG";
 
 export interface AuthService {
-    authenticate(socket :SocketIO.Socket, data :any):Promise<Object>;
+    authenticate(socket :Socket, data :any):Promise<Object>;
 }
 
 class NopAuthService implements AuthService {
-    authenticate(socket :SocketIO.Socket):Promise<Object> {
+    authenticate(socket :Socket):Promise<Object> {
         return Promise.resolve({});
     }
 }
 
 var progHandler = 0;
+
+export interface Socket {
+    id :string;
+    on(event :string, cb :(...args :any[])=>any) :any;
+    emit(event :string, ...args :any[]) :any;
+    removeListener(event :string, cb :(...args :any[])=>any) :any;
+    removeAllListeners() :void;
+}
 
 export class Broker {
 
@@ -59,7 +74,7 @@ export class Broker {
     }
 
 
-    public setSocket(value: SocketIO.Server) :this {
+    public setSocketServer(value: SocketIO.Server) :this {
         if (this.started) throw new Error("Cannot change the socket on an already started broker");
         this.socket = value;
         return this;
@@ -118,17 +133,19 @@ export class Broker {
 
         // Wait for connections to be made
         return Promise.all(this.startWait).then(()=>{
-            dbgBroker("Hooking on socket");
-            // Hook the socket
-            this.socket.on('connect', (sock) => {
-                if (this.closed) return;
-                dbgSocket("Got connection %s from %s", sock.id, sock.client.conn.remoteAddress);
-                this.auth.authenticate(sock, null).then((authData)=>{
-                    dbgSocket("Authenticated %s with data %o", sock.id, authData);
-                    // Create a handler for this connection
-                    this.handle(sock, authData);
+            if (this.socket) {
+                dbgBroker("Hooking on socket");
+                // Hook the socket
+                this.socket.on('connect', (sock) => {
+                    if (this.closed) return;
+                    dbgSocket("Got connection %s from %s", sock.id, sock.client.conn.remoteAddress);
+                    this.auth.authenticate(sock, null).then((authData)=>{
+                        dbgSocket("Authenticated %s with data %o", sock.id, authData);
+                        // Create a handler for this connection
+                        this.handle(sock, authData);
+                    });
                 });
-            });
+            }
 
             // Hook the oplog
             dbgBroker("Hooking on oplog");
@@ -136,7 +153,7 @@ export class Broker {
         });
     }
 
-    public handle(sock :SocketIO.Socket, authData :any) :Handler {
+    public handle(sock :Socket, authData :any) :Handler {
         var handler = new Handler(sock, authData, this);
         sock.on('auth', (data:any)=>{
             this.auth.authenticate(sock, data).then((authData)=>{
@@ -810,7 +827,7 @@ export class Handler implements Subscriber {
 
  
     constructor(
-        private socket :SocketIO.Socket,
+        private socket :Socket,
         private authData :Object,
         private broker :Broker
     ) {
@@ -832,6 +849,7 @@ export class Handler implements Subscriber {
         broker.register(this);
 
         socket.emit('aa');
+        socket.on('aa', ()=>{socket.emit('aa')});
     }
 
     updateAuthData(data :any) {
@@ -905,7 +923,7 @@ export class Handler implements Subscriber {
         return 'k';
     }
 
-    ping(id :string) {
+    ping(id :string) :string {
         dbgHandler("%s received ping %s", this.id, id);
         return id;
     }
@@ -989,3 +1007,53 @@ export class Recomposer {
 
 
 var hasOwnProperty = Object.prototype.hasOwnProperty;
+
+var socketcnt = 1;
+export class LocalSocket {
+    server :Socket;
+    client :Socket;
+
+    constructor() {
+        var a = new InternalSocket();
+        var b = new InternalSocket();
+        a.other = b;
+        b.other = a;
+        
+        b.id = 'local' + (socketcnt++);
+        a.id = '#/' + b.id;
+
+        a.role = 'SRV';
+        b.role = 'CLN';
+         
+        this.server = a;
+        this.client = b;
+    }
+}
+
+class InternalSocket extends EventEmitter implements Socket {
+    id :string;
+    role :string;
+    other :InternalSocket;
+
+    constructor() {
+        super();
+    }
+    
+    emit(name :string, ...args :any[]) :boolean {
+        console.log(this.role, name);
+        var lstnrs = this.other.listeners(name);
+        /*
+        var cb :Function;
+        if (typeof(args[args.length-1]) == 'function') {
+            cb = args.pop();
+        }
+        */
+        var val :any;
+        for (var i = 0; i < lstnrs.length; i++) {
+            val = lstnrs[i].apply(this, args);
+        }
+        //if (cb) cb(val);
+        return !!lstnrs.length;
+    }
+
+}

@@ -6,7 +6,7 @@ Debug.enable('tsdb:*');
 import * as SocketIO from 'socket.io';
 import * as SocketClient from 'socket.io-client';
 
-import {Broker,AuthService,SimpleQueryDef,SimpleQueryState,Handler,Recomposer} from '../main/Broker';
+import {Broker,AuthService,SimpleQueryDef,SimpleQueryState,Handler,Recomposer,Socket,LocalSocket} from '../main/Broker';
 import * as Utils from '../main/Utils';
 
 import {assert,is} from 'tsmatchers';
@@ -43,13 +43,20 @@ interface TestHandler {
 }
 
 var socketServer :SocketIO.Server;
+var localSocket :LocalSocket;
+
+var useLocalSocket = true;
 
 var lastBroker :Broker;
 function getBroker() :Promise<Broker & TestBroker> {
     var proms :Promise<any>[] = [];
     if (lastBroker) proms.push(lastBroker.close());
     if (socketServer) socketServer.close();
-    socketServer = SocketIO.listen(5000);
+    if (!useLocalSocket) {
+        socketServer = SocketIO.listen(5000);
+    } else {
+        socketServer = null;
+    }
     var brk = new Broker(socketServer, mongoUrl + 'test','bag1',mongoUrl + 'local');
     lastBroker = brk;
     proms.push(brk.start());
@@ -63,16 +70,22 @@ var lastConn :SocketIOClient.Socket;
 
 function getConnection() {
     if (lastConn) lastConn.close();
-    var socketOptions ={
-        transports: ['websocket'],
-        'force new connection': true
-    };
-    return lastConn = SocketClient.connect(socketURL, socketOptions);
+    if (useLocalSocket) {
+        localSocket = new LocalSocket();
+        lastBroker.handle(localSocket.server, null);
+        return localSocket.client;
+    } else {
+        var socketOptions ={
+            transports: ['websocket'],
+            'force new connection': true
+        };
+        return lastConn = SocketClient.connect(socketURL, socketOptions);
+    }
 }
 
 interface ConnectedClient {
     broker :Broker & TestBroker;
-    connection :SocketIOClient.Socket;
+    connection :Socket;
     handler :Handler & TestHandler;
     eventCheck? :CheckPromise<SocketEvent[]>;
 }
@@ -81,10 +94,14 @@ function getConnectedClient() :Promise<ConnectedClient> {
     return getBroker().then((brk)=>{
         var conn = getConnection();
         return new Promise<ConnectedClient>((res,rej)=>{
+            var done = false;
             conn.on('aa', ()=>{
+                if (done) return;
+                done = true;
                 var hnd = <Handler & TestHandler>brk.handlers[conn.id];
                 res({broker:brk, connection:conn, handler:hnd});
             });
+            conn.emit('aa');
         });
     })
 }
@@ -117,7 +134,7 @@ interface CheckPromise<T> extends Promise<T> {
     stop();
 }
 
-function checkEvents(conn :SocketIOClient.Socket, events :SocketEvent[], anyOrder = false) :CheckPromise<SocketEvent[]> {
+function checkEvents(conn :Socket, events :SocketEvent[], anyOrder = false) :CheckPromise<SocketEvent[]> {
     var ret :SocketEvent[] = [];
     var cbs = {};
     var cp = <CheckPromise<SocketEvent[]>>new Promise<SocketEvent[]>((res,err) => {
@@ -163,7 +180,7 @@ function checkEvents(conn :SocketIOClient.Socket, events :SocketEvent[], anyOrde
     });
     cp.stop = ()=>{
         for (var k in cbs) {
-            conn.off(k, cbs[k]);
+            conn.removeListener(k, cbs[k]);
         }
     };
     return cp;
@@ -208,6 +225,47 @@ describe("Broker >", ()=>{
                         done();
                     });
                 });
+                conn.emit('aa');
+            });
+        });
+
+        describe('Local socket >', ()=>{
+            it('Should send and receive', ()=>{
+                var sock = new LocalSocket();
+
+                assert("Has same id", sock.server.id.substr(2), sock.client.id);
+
+                var clrecv :string[] = [];
+                var srrecv :string[] = [];
+
+                sock.client.on('test1',(val)=>clrecv.push('test1:' + val));
+                sock.client.on('test2',(val)=>clrecv.push('test2:' + val));
+
+                sock.server.on('test1',(val)=>srrecv.push('test1:' + val));
+                sock.server.on('test2',(val)=>srrecv.push('test2:' + val));
+
+                sock.client.emit('test1', 'ciao');
+                sock.server.emit('test1', 'come va');
+                sock.client.emit('test2', 'ok');
+
+                assert("Server received messages", srrecv, is.array.equals(['test1:ciao','test2:ok']));
+                assert("Client received messages", clrecv, is.array.equals(['test1:come va']));
+            });
+
+            it('Should obey callbacks', ()=>{
+                var sock = new LocalSocket();
+
+                sock.client.on('test1',(val,cb)=>{
+                    assert("There is a callback", cb, is.function);
+                    cb('kk');
+                });
+                
+                var got :string = null;
+                sock.server.emit('test1', 'ciao', (resp)=>{
+                    got = resp;
+                });
+
+                assert("got reponse", got, 'kk');
             });
         });
     });
@@ -604,26 +662,33 @@ describe("Broker >", ()=>{
             });
             
 
-            it('Should notify of changes on specific value', (done)=>{
+            it('Should notify of changes on specific value', ()=>{
                 var evtCount = 0;
                 var cc :ConnectedClient = null;
+                var pkprom :ExternalPromise<any> = null;
                 return getConnectedClient().then((ncc)=>{
                     cc = ncc;
                     cc.connection.on('v',(pl)=>{
+                        console.log('in on(v) ' + evtCount);
+                        pkprom.resolve();
                         if (evtCount == 0) {
                             assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
                         } else if (evtCount == 1) {
                             assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:'sara'}));
-                            done();
                         }
                         evtCount++;
                     });
+                    pkprom = extPromise();
                     return sendCommand(cc, 'sp', '/users/2/name');
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
+                    return pkprom;
+                }).then(()=>{
+                    pkprom = extPromise();
                     return sendCommand(cc, 's', '/users/2/name', 'sara');
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
+                    return pkprom;
                 });
             });
 
@@ -696,49 +761,60 @@ describe("Broker >", ()=>{
                 });
             });
 
-            it('Should notify of delete down to specific value', (done)=>{
+            it('Should notify of delete down to specific value', ()=>{
                 var evtCount = 0;
                 var cc :ConnectedClient = null;
+                var pkprom :ExternalPromise<any> = null;
                 return getConnectedClient().then((ncc)=>{
                     cc = ncc;
                     cc.connection.on('v',(pl)=>{
+                        pkprom.resolve();
                         if (evtCount == 0) {
                             assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
                         } else if (evtCount == 1) {
                             assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:null}));
-                            done();
                         }
                         evtCount++;
                     });
+                    pkprom = extPromise();
                     return sendCommand(cc, 'sp', '/users/2/name');
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
+                    return pkprom;
+                }).then(()=>{
+                    pkprom = extPromise();
                     return sendCommand(cc, 's', '/users/2',null);
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
+                    return pkprom;
                 });
             });
 
-            it('Should notify of delete of specific values', (done)=>{
+            it('Should notify of delete of specific values', ()=>{
                 var evtCount = 0;
                 var cc :ConnectedClient = null;
+                var pkprom :ExternalPromise<any> = null;
                 return getConnectedClient().then((ncc)=>{
                     cc = ncc;
                     cc.connection.on('v',(pl)=>{
+                        pkprom.resolve();
                         if (evtCount == 0) {
                             assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
                         } else if (evtCount == 1) {
                             assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:null}));
-                            done();
                         }
                         evtCount++;
                     });
                     return sendCommand(cc, 'sp', '/users/2/name');
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
+                    return pkprom;
+                }).then(()=>{
+                    pkprom = extPromise();
                     return sendCommand(cc, 's', '/users/2/name', null);
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
+                    return pkprom;
                 });
             });
 
@@ -1044,4 +1120,23 @@ function wait(to :number) :Promise<any> {
     return new Promise<any>((res,rej)=>{
         setTimeout(()=>res(null), to);
     });
+}
+
+interface ExternalPromise<T> extends Promise<T> {
+    resolve(val? :T);
+    reject(err :any);
+}
+
+function extPromise<T>() :ExternalPromise<T> {
+    var extres :(val : T | Thenable<T>) => void = null;
+    var extrej :(err :any) => void = null;
+    var prom = <ExternalPromise<T>>new Promise<T>((res,rej) => {
+        extres = res;
+        extrej = rej;
+    });
+    prom.resolve = (val :T) => {
+        extres(val);
+    };
+    prom.reject = (err :any)=>extrej(err);
+    return prom;
 }

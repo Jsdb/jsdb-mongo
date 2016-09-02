@@ -1,3 +1,6 @@
+/**
+ * TSDB Mongo 20160902_183243_master_1.0.0_5d9f9c3
+ */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
@@ -8,18 +11,20 @@ var __extends = (this && this.__extends) || function (d, b) {
         var v = factory(require, exports); if (v !== undefined) module.exports = v;
     }
     else if (typeof define === 'function' && define.amd) {
-        define(["require", "exports", 'mongodb', 'debug', './Utils'], factory);
+        define(["require", "exports", 'mongodb', 'debug', './Utils', 'events'], factory);
     }
 })(function (require, exports) {
     "use strict";
     var Mongo = require('mongodb');
     var Debug = require('debug');
     var Utils = require('./Utils');
+    var events_1 = require('events');
     var dbgBroker = Debug('tsdb:mongo:broker');
     var dbgQuery = Debug('tsdb:mongo:query');
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
+    exports.VERSION = "20160902_183243_master_1.0.0_5d9f9c3";
     var NopAuthService = (function () {
         function NopAuthService() {
         }
@@ -47,7 +52,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 this.initOplog(oplogDb);
             }
         }
-        Broker.prototype.setSocket = function (value) {
+        Broker.prototype.setSocketServer = function (value) {
             if (this.started)
                 throw new Error("Cannot change the socket on an already started broker");
             this.socket = value;
@@ -105,18 +110,20 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.started = true;
             // Wait for connections to be made
             return Promise.all(this.startWait).then(function () {
-                dbgBroker("Hooking on socket");
-                // Hook the socket
-                _this.socket.on('connect', function (sock) {
-                    if (_this.closed)
-                        return;
-                    dbgSocket("Got connection %s from %s", sock.id, sock.client.conn.remoteAddress);
-                    _this.auth.authenticate(sock, null).then(function (authData) {
-                        dbgSocket("Authenticated %s with data %o", sock.id, authData);
-                        // Create a handler for this connection
-                        _this.handle(sock, authData);
+                if (_this.socket) {
+                    dbgBroker("Hooking on socket");
+                    // Hook the socket
+                    _this.socket.on('connect', function (sock) {
+                        if (_this.closed)
+                            return;
+                        dbgSocket("Got connection %s from %s", sock.id, sock.client.conn.remoteAddress);
+                        _this.auth.authenticate(sock, null).then(function (authData) {
+                            dbgSocket("Authenticated %s with data %o", sock.id, authData);
+                            // Create a handler for this connection
+                            _this.handle(sock, authData);
+                        });
                     });
-                });
+                }
                 // Hook the oplog
                 dbgBroker("Hooking on oplog");
                 return _this.hookOplog();
@@ -774,6 +781,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             });
             broker.register(this);
             socket.emit('aa');
+            socket.on('aa', function () { socket.emit('aa'); });
         }
         Handler.prototype.updateAuthData = function (data) {
             this.authData = data;
@@ -916,6 +924,50 @@ var __extends = (this && this.__extends) || function (d, b) {
     }());
     exports.Recomposer = Recomposer;
     var hasOwnProperty = Object.prototype.hasOwnProperty;
+    var socketcnt = 1;
+    var LocalSocket = (function () {
+        function LocalSocket() {
+            var a = new InternalSocket();
+            var b = new InternalSocket();
+            a.other = b;
+            b.other = a;
+            b.id = 'local' + (socketcnt++);
+            a.id = '#/' + b.id;
+            a.role = 'SRV';
+            b.role = 'CLN';
+            this.server = a;
+            this.client = b;
+        }
+        return LocalSocket;
+    }());
+    exports.LocalSocket = LocalSocket;
+    var InternalSocket = (function (_super) {
+        __extends(InternalSocket, _super);
+        function InternalSocket() {
+            _super.call(this);
+        }
+        InternalSocket.prototype.emit = function (name) {
+            var args = [];
+            for (var _i = 1; _i < arguments.length; _i++) {
+                args[_i - 1] = arguments[_i];
+            }
+            console.log(this.role, name);
+            var lstnrs = this.other.listeners(name);
+            /*
+            var cb :Function;
+            if (typeof(args[args.length-1]) == 'function') {
+                cb = args.pop();
+            }
+            */
+            var val;
+            for (var i = 0; i < lstnrs.length; i++) {
+                val = lstnrs[i].apply(this, args);
+            }
+            //if (cb) cb(val);
+            return !!lstnrs.length;
+        };
+        return InternalSocket;
+    }(events_1.EventEmitter));
 });
 
 //# sourceMappingURL=Broker.js.map

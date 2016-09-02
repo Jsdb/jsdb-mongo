@@ -1,6 +1,14 @@
 import * as Mongo from 'mongodb';
+export declare var VERSION: string;
 export interface AuthService {
-    authenticate(socket: SocketIO.Socket, data: any): Promise<Object>;
+    authenticate(socket: Socket, data: any): Promise<Object>;
+}
+export interface Socket {
+    id: string;
+    on(event: string, cb: (...args: any[]) => any): any;
+    emit(event: string, ...args: any[]): any;
+    removeListener(event: string, cb: (...args: any[]) => any): any;
+    removeAllListeners(): void;
 }
 export declare class Broker {
     private id;
@@ -18,14 +26,14 @@ export declare class Broker {
     private subscriptions;
     private lastOplogStream;
     constructor($socket?: SocketIO.Server, collectionDb?: string, collectionName?: string, oplogDb?: string, collectionOptions?: any);
-    setSocket(value: SocketIO.Server): this;
+    setSocketServer(value: SocketIO.Server): this;
     setCollection(value: Mongo.Collection): this;
     setOplogDb(value: Mongo.Db): this;
     initCollection(collectionDb: string, collectionName: string, collectionOptions?: Mongo.MongoClientOptions): this;
     initOplog(oplogDb: string): this;
     setAuthService(value: AuthService): this;
     start(): Promise<any>;
-    handle(sock: SocketIO.Socket, authData: any): Handler;
+    handle(sock: Socket, authData: any): Handler;
     private hookOplog();
     register(handler: Handler): void;
     unregister(handler: Handler): void;
@@ -101,7 +109,7 @@ export declare class Handler implements Subscriber {
     closed: boolean;
     private pathSubs;
     private queries;
-    constructor(socket: SocketIO.Socket, authData: Object, broker: Broker);
+    constructor(socket: Socket, authData: Object, broker: Broker);
     updateAuthData(data: any): void;
     close(): void;
     subscribePath(path: string): string;
@@ -124,4 +132,9 @@ export declare class Recomposer {
     add(obj: any): void;
     get(): any;
     private findOrCreateRefFor(path, obj);
+}
+export declare class LocalSocket {
+    server: Socket;
+    client: Socket;
+    constructor();
 }
