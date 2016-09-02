@@ -111,16 +111,26 @@ var __extends = (this && this.__extends) || function (d, b) {
                     if (_this.closed)
                         return;
                     dbgSocket("Got connection %s from %s", sock.id, sock.client.conn.remoteAddress);
-                    _this.auth.authenticate(sock).then(function (authData) {
+                    _this.auth.authenticate(sock, null).then(function (authData) {
                         dbgSocket("Authenticated %s with data %o", sock.id, authData);
                         // Create a handler for this connection
-                        var handler = new Handler(sock, authData, _this);
+                        _this.handle(sock, authData);
                     });
                 });
                 // Hook the oplog
                 dbgBroker("Hooking on oplog");
                 return _this.hookOplog();
             });
+        };
+        Broker.prototype.handle = function (sock, authData) {
+            var _this = this;
+            var handler = new Handler(sock, authData, this);
+            sock.on('auth', function (data) {
+                _this.auth.authenticate(sock, data).then(function (authData) {
+                    handler.updateAuthData(authData);
+                });
+            });
+            return handler;
         };
         Broker.prototype.hookOplog = function () {
             var _this = this;
@@ -765,6 +775,9 @@ var __extends = (this && this.__extends) || function (d, b) {
             broker.register(this);
             socket.emit('aa');
         }
+        Handler.prototype.updateAuthData = function (data) {
+            this.authData = data;
+        };
         Handler.prototype.close = function () {
             dbgHandler("%s closing handler", this.id);
             if (this.closed)

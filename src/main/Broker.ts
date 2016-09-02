@@ -12,7 +12,7 @@ var dbgHandler = Debug('tsdb:mongo:handler');
 
 
 export interface AuthService {
-    authenticate(socket :SocketIO.Socket):Promise<Object>;
+    authenticate(socket :SocketIO.Socket, data :any):Promise<Object>;
 }
 
 class NopAuthService implements AuthService {
@@ -123,10 +123,10 @@ export class Broker {
             this.socket.on('connect', (sock) => {
                 if (this.closed) return;
                 dbgSocket("Got connection %s from %s", sock.id, sock.client.conn.remoteAddress);
-                this.auth.authenticate(sock).then((authData)=>{
+                this.auth.authenticate(sock, null).then((authData)=>{
                     dbgSocket("Authenticated %s with data %o", sock.id, authData);
                     // Create a handler for this connection
-                    var handler = new Handler(sock, authData, this);
+                    this.handle(sock, authData);
                 });
             });
 
@@ -134,6 +134,16 @@ export class Broker {
             dbgBroker("Hooking on oplog");
             return this.hookOplog();
         });
+    }
+
+    public handle(sock :SocketIO.Socket, authData :any) :Handler {
+        var handler = new Handler(sock, authData, this);
+        sock.on('auth', (data:any)=>{
+            this.auth.authenticate(sock, data).then((authData)=>{
+                handler.updateAuthData(authData);
+            });
+        });
+        return handler;
     }
 
     private hookOplog() :Promise<any> {
@@ -822,6 +832,10 @@ export class Handler implements Subscriber {
         broker.register(this);
 
         socket.emit('aa');
+    }
+
+    updateAuthData(data :any) {
+        this.authData = data;
     }
 
     close() {

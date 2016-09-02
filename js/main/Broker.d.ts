@@ -1,6 +1,6 @@
 import * as Mongo from 'mongodb';
 export interface AuthService {
-    authenticate(socket: SocketIO.Socket): Promise<Object>;
+    authenticate(socket: SocketIO.Socket, data: any): Promise<Object>;
 }
 export declare class Broker {
     private id;
@@ -25,6 +25,7 @@ export declare class Broker {
     initOplog(oplogDb: string): this;
     setAuthService(value: AuthService): this;
     start(): Promise<any>;
+    handle(sock: SocketIO.Socket, authData: any): Handler;
     private hookOplog();
     register(handler: Handler): void;
     unregister(handler: Handler): void;
@@ -101,6 +102,7 @@ export declare class Handler implements Subscriber {
     private pathSubs;
     private queries;
     constructor(socket: SocketIO.Socket, authData: Object, broker: Broker);
+    updateAuthData(data: any): void;
     close(): void;
     subscribePath(path: string): string;
     unsubscribePath(path: string): string;
