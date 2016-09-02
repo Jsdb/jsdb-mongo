@@ -1,4 +1,6 @@
 import * as Client from '../main/Client2';
+import * as SocketIO from 'socket.io';
+import * as SocketIOClient from 'socket.io-client';
 
 import {assert, is} from 'tsmatchers';
 
@@ -8,7 +10,7 @@ interface TestDb3Root {
 
 var root: Client.RDb3Root & TestDb3Root;
 
-describe.only('RDb3Client >', () => {
+describe('RDb3Client >', () => {
     describe('Local data >', () => {
 
         beforeEach(function () {
@@ -395,7 +397,236 @@ describe.only('RDb3Client >', () => {
                 assert("Received new child_changed", movs, is.array.withLength(1));
             });
         });
+    });
+
+    describe('Queries >',()=>{
+        beforeEach(function () {
+            root = <any>new Client.RDb3Root(null, 'http://ciao/');
+        });
+
+        describe('Events >', ()=>{
+            it('Should notify query of child_added, child_changed and child_removed', ()=>{
+                var ref = root.getUrl('/list');
+                ref = ref.orderByChild('val');
+                (<Client.QuerySubscription>ref.getSubscription()).id = '1a';
+
+                var value :any = null;
+                ref.on('value', (data) => {
+                    value = data.val();
+                });
+
+                var adds: Client.RDb3Snap[] = [];
+                ref.on('child_added', (data) => adds.push(data));
+
+                root.handleQueryChange('1a', '/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 }, $l :true });
+
+                assert("Received child_added", adds, is.array.withLength(3));
+                for (var i = 0; i < adds.length; i++) {
+                    assert("Received snapshots does not expose url meta-path", adds[i].ref().url.substr(0,6), '/list/');
+                }
+
+                assert("Value events not sent yet", value, is.falsey);
+
+                root.handleQueryChange('1a', '/list', { $i :true, $d :true });
+
+                assert("Value events sent correctly", value, is.strictly.object.matching({a:is.object, b:is.object, c:is.object}));
+
+                var rems: Client.RDb3Snap[] = [];
+                var chng: Client.RDb3Snap[] = [];
+                ref.on('child_removed', (data) => rems.push(data));
+                ref.on('child_changed', (data) => chng.push(data));
+
+                root.handleQueryChange('1a', '/list', { a: { val: 3 }, b: { val: 4 }, $i:true });
+
+                assert("Received child_changed", chng, is.array.withLength(2));
+                for (var i = 0; i < chng.length; i++) {
+                    assert("Received snapshots does not expose url meta-path", chng[i].ref().url.substr(0,6), '/list/');
+                }
+
+                root.handleQueryChange('1a', '/list', { b: { val: 4 } });
+                assert("Received child_removed", rems, is.array.withLength(2));
+                for (var i = 0; i < rems.length; i++) {
+                    assert("Received snapshots does not expose url meta-path", rems[i].ref().url.substr(0,6), '/list/');
+                }
+            });
+
+            it('Should notify query of child_changed from nested', ()=>{
+                var ref = root.getUrl('/list');
+                ref = ref.orderByChild('val');
+                (<Client.QuerySubscription>ref.getSubscription()).id = '1a';
+
+                var rems: Client.RDb3Snap[] = [];
+                var chng: Client.RDb3Snap[] = [];
+                ref.on('child_removed', (data) => rems.push(data));
+                ref.on('child_changed', (data) => chng.push(data));
 
 
+                root.handleQueryChange('1a', '/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } });
+
+                assert("Received child_changed", chng, is.array.withLength(0));
+
+                root.handleQueryChange('1a', '/list/a/val', 5);
+
+                assert("Received child_changed", chng, is.array.withLength(1));
+                for (var i = 0; i < chng.length; i++) {
+                    assert("Received changed snapshots does not expose url meta-path", chng[i].ref().url.substr(0,6), '/list/');
+                }
+
+                root.handleQueryChange('1a', '/list/b', null);
+                assert("Received child_removed", rems, is.array.withLength(1));
+                for (var i = 0; i < rems.length; i++) {
+                    assert("Received removed snapshots does not expose url meta-path", rems[i].ref().url.substr(0,6), '/list/');
+                }
+            });
+        });
+
+        describe('Sorting >', ()=>{
+            it('Should notify query child_added sorted on first set', ()=>{
+                var ref = root.getUrl('/list');
+                ref = ref.orderByChild('val');
+                (<Client.QuerySubscription>ref.getSubscription()).id = '1a';
+
+                var adds :Client.RDb3Snap[] = [];
+                var preks :string[] = []; 
+                var items :string[] = [];
+                ref.on('child_added', (data,prek) => {adds.push(data);preks.push(prek);items.push(data.key())});
+
+                root.handleQueryChange('1a', '/list', { a: { val: 3 }, b: { val: 2 }, c: { val: 1 } });
+
+                assert("Received child_added", adds, is.array.withLength(3));
+                assert("Kys are sorted", items, is.array.equals(['c','b','a']));
+                assert("Pre keys are correct", preks, is.array.equals([null,'c','b']));
+            });
+
+            it('Should notify query child_changed (and child_moved) with new position', ()=>{
+                var ref = root.getUrl('/list');
+                ref = ref.orderByChild('val');
+                (<Client.QuerySubscription>ref.getSubscription()).id = '1a';
+
+                ref.on('child_added', (data,prek) => {});
+
+                root.handleQueryChange('1a', '/list', { a: { val: 1 }, b: { val: 3 }, c: { val: 5 } });
+
+                var adds :Client.RDb3Snap[] = [];
+                var preks :string[] = []; 
+                var items :string[] = [];
+                ref.on('child_changed', (data,prek) => {adds.push(data);preks.push(prek);items.push(data.key())});
+
+                root.handleQueryChange('1a', '/list/c/val', 2);
+
+                assert("Kys are sorted", items, is.array.equals(['c']));
+                assert("Pre keys are correct", preks, is.array.equals(['a']));
+
+                ref.off('child_changed');
+
+                var preks :string[] = []; 
+                var items :string[] = [];
+                ref.on('child_moved', (data,prek) => {adds.push(data);preks.push(prek);items.push(data.key())});
+
+                root.handleQueryChange('1a', '/list/c/val', 5);
+
+                assert("Kys are sorted", items, is.array.equals(['c']));
+                assert("Pre keys are correct", preks, is.array.equals(['b']));
+            });
+            
+
+            // TODO child_moved on child removal
+
+            it('Should remove excess elements', ()=>{
+                var ref = root.getUrl('/list');
+                ref = ref.orderByChild('val').limitToFirst(3);
+                (<Client.QuerySubscription>ref.getSubscription()).id = '1a';
+
+                var adds :Client.RDb3Snap[] = [];
+                ref.on('child_added', (data,prek) => {adds.push(data)});
+                var rems :Client.RDb3Snap[] = [];
+                ref.on('child_removed', (data,prek) => {rems.push(data)});
+
+                root.handleQueryChange('1a', '/list', { a: { val: 5 }, b: { val: 6 }, c: { val: 7 } });
+
+                assert("Received child_added", adds, is.array.withLength(3));
+
+                adds=[];
+
+                root.handleQueryChange('1a', '/list/d/val', 1);
+
+                assert("Received new child_added", adds, is.array.withLength(1));
+                assert("Received child_removed", rems, is.array.withLength(1));
+                assert("Removed the last element", rems[0].key(), 'c');
+
+                root.handleQueryChange('1a', '/list/d/val', 7);
+                adds = [];
+                rems = [];
+                root.handleQueryChange('1a', '/list', { x:{val:1}, y:{val:2}, $i:true});
+
+                assert("Received new child_added", adds, is.array.withLength(2));
+                assert("Received child_removed", rems, is.array.withLength(2));
+                assert("Removed the last element", rems[0].key(), 'b');
+                assert("Removed the last element", rems[1].key(), 'd');
+            });
+        });
+    });
+
+    describe('Writing >', ()=>{
+        beforeEach(function () {
+            root = <any>new Client.RDb3Root(null, 'http://ciao/');
+        });
+
+        it('Should update data locally', ()=>{
+            var ref = root.getUrl('/list');
+
+            var valds :Client.RDb3Snap;
+            ref.on('value', (ds)=>valds = ds);
+
+            assert('No value sent yet', valds, is.undefined);
+
+            ref.set({a:1,b:2});
+
+            assert('Value set after first set', valds, is.object);
+            assert('Value correct after first set', valds.val(), is.object.matching({a:1,b:2}));
+
+            valds = null;
+
+            ref.set({c:3,d:4});
+
+            assert('Value set after second set', valds, is.object);
+            assert('Value correct after second set', valds.val(), is.strictly.object.matching({c:3,d:4}));
+            
+            valds = null;
+
+            ref.update({d:6,e:7});
+
+            assert('Value set after update', valds, is.object);
+            assert('Value correct after update', valds.val(), is.strictly.object.matching({c:3,d:6,e:7}));
+
+            valds = null;
+
+            ref.remove();
+            assert('Value set after delete', valds, is.object);
+            assert('Value correct after delete', valds.exists(), false);
+       });
+    });
+
+    describe('E2E >', ()=>{
+        var ssock :SocketIO.Server;
+        var csock :SocketIOClient.Socket;
+        beforeEach(function (done) {
+            if (ssock) ssock.close();
+            ssock = SocketIO.listen(5000);
+            if (csock) {
+                csock.removeAllListeners();
+                csock.close();
+            }
+            var socketOptions ={
+                transports: ['websocket'],
+                'force new connection': true
+            };
+            csock = SocketIOClient.connect('http://0.0.0.0:5000', socketOptions);
+
+            root = <any>new Client.RDb3Root(csock, 'http://ciao/');
+            root.whenReady().then(()=>done());
+        });
+
+        
     });
 });
