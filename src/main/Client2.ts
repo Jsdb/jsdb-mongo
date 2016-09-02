@@ -46,55 +46,26 @@ export class RDb3Root {
         delete this.subscriptions[path];
     }
 
-    private broadcast(path :string, val :any, cb :BroadcastCb) {
-        this.broadcastDown(path, val, cb);
-        var sub = Utils.leafPath(path);
-        var subv :any = {};
-        subv[sub] = val;
-        markIncomplete(subv);
-        this.broadcastUp(Utils.parentPath(path), subv, cb);
-    }
-
-    private broadcastDown(path :string, val :any, cb :BroadcastCb) {
-        if (val == null) {
-            for (var k in this.subscriptions) {
-                if (k.indexOf(path) == 0) {
-                    this.broadcastToHandlers(k, null, cb);
-                }
-            }
-        }
-        if (typeof(val) == 'object' || typeof(val) == 'function') {
-            for (var k in val) {
-                this.broadcastDown(path + '/' + k, val[k], cb);
-            }
-        }
-        this.broadcastToHandlers(path, val, cb);
-    }
-
-    private broadcastUp(path :string, val :any, cb :BroadcastCb) {
-        if (!path) return;
-        this.broadcastToHandlers(path, val, cb);
-        if (path.length == 0) return;
-        var sub = Utils.leafPath(path);
-        var subv :any = {};
-        subv[sub] = val;
-        markIncomplete(subv);
-        this.broadcastUp(Utils.parentPath(path), subv, cb);
-    }
-
-    private broadcastToHandlers(acpath :string, acval :any, cb :BroadcastCb) {
-        var sub = this.subscriptions[acpath];
-        if (!sub) return;
-        // TODO get the previous value from local copy of data
-        cb(sub, acpath, acval);
-    }
-
     getValue(url: string | string[]) :any {
         var ret = findChain(url, this.data, true, false);
         return ret.pop();
     }
 
     handleChange(path :string, val :any) {
+        // Normalize the path to "/" by wrapping the val
+        var nv :any = val;
+        var sp = splitUrl(path);
+        sp.splice(0,1);
+        while (sp.length) {
+            var nnv :any = {};
+            nnv[sp.pop()] = nv;
+            markIncomplete(nnv);
+            nv = nnv;
+        }
+
+        this.recurseApplyBroadcast(nnv, this.data, null, '');
+
+        /*
         // Find involved events
         var events :HandlerTrigger[] = [];
         this.broadcast(path, val, (sub, spath, acval) => {
@@ -116,6 +87,105 @@ export class RDb3Root {
         for (var i = 0; i < events.length; i++) {
             events[i]();
         }
+        */
+    }
+
+    recurseApplyBroadcast(newval :any, acval :any, parentval :any, path :string) :boolean {
+        var leaf = Utils.leafPath(path);
+        if (newval !== null && typeof(newval) === 'object') {
+            var changed = false;
+            // Change from native value to object
+            if (typeof(acval) !== 'object') {
+                changed = true;
+                acval = {};
+                parentval[leaf] = acval;
+            }
+
+            // Look children of the new value
+            for (var k in newval) {
+                if (k.charAt(0) == '$') continue;
+                var newc = newval[k];
+
+                var pre = acval[k];
+                if (newc === null) {
+                    // Explicit delete
+                    var presnap = new RDb3Snap(pre, this, path+'/'+k);
+                    if (this.recurseApplyBroadcast(newc, pre, acval, path +'/'+k)) {
+                        this.broadcastChildRemoved(path, k, presnap);
+                        changed = true;
+                    }
+                } else if (typeof(pre) === 'undefined') {
+                    // Child added
+                    pre = {};
+                    acval[k] = pre;
+                    changed = true;
+                    this.recurseApplyBroadcast(newc, pre, acval, path +'/'+k);
+                    this.broadcastChildAdded(path, k, acval[k]);
+                } else {
+                    // Maybe child changed
+                    if (this.recurseApplyBroadcast(newc, pre, acval, path+'/'+k)) {
+                        changed = true;
+                        this.broadcastChildChanged(path, k, acval[k]);
+                    }
+                }
+            }
+            if (!isIncomplete(newval)) {
+                // If newc is not incomplete, delete all the other children
+                for (var k in acval) {
+                    if (newval[k] === null || typeof(newval[k]) === 'undefined') {
+                        var pre = acval[k];
+                        var presnap = new RDb3Snap(pre, this, path+'/'+k);
+                        if (this.recurseApplyBroadcast(null, pre, acval, path +'/'+k)) {
+                            this.broadcastChildRemoved(path, k, presnap);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if (changed) {
+                this.broadcastValue(path, acval);
+            }
+            return changed;
+        } else {
+            if (parentval[leaf] != newval) {
+                if (newval === null) {
+                    delete parentval[leaf];
+                    // TODO we should probably propagate the nullification downwards to trigger value changed on who's listening below us
+                } else {
+                    parentval[leaf] = newval;
+                }
+                this.broadcastValue(path, newval);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    broadcastValue(path :string, val :any) {
+        this.broadcast(path, 'value', ()=>val instanceof RDb3Snap ? val : new RDb3Snap(val, this, path));
+    }
+
+    broadcastChildAdded(path :string, child :string, val :any) {
+        this.broadcast(path, 'child_added', ()=>val instanceof RDb3Snap ? val : new RDb3Snap(val, this, path+'/'+child));
+    }
+
+    broadcastChildChanged(path :string, child :string, val :any) {
+        this.broadcast(path, 'child_changed', ()=>val instanceof RDb3Snap ? val : new RDb3Snap(val, this, path+'/'+child));
+    }
+
+    broadcastChildRemoved(path :string, child :string, val :any) {
+        this.broadcast(path, 'child_removed', ()=>val instanceof RDb3Snap ? val : new RDb3Snap(val, this, path+'/'+child));
+    }
+
+    broadcast(path :string, type :string, snapProvider :()=>RDb3Snap) {
+        var sub = this.subscriptions[path];
+        if (!sub) return;
+        var handlers = sub.findByType(type);
+        if (handlers.length == 0) return;
+        var snap = snapProvider();
+        for (var i = 0; i < handlers.length; i++) {
+            handlers[i].callback(snap, null);
+        }
     }
 
 }
@@ -127,44 +197,22 @@ export class Subscription {
     }
 
     cbs: Handler[] = [];
-    endCbs: Handler[] = [];
 
     add(cb: Handler) {
         this.cbs.push(cb);
-        cb.init();
-    }
-
-    addEnd(cb: Handler) {
-        this.endCbs.push(cb);
-        cb.init();
     }
 
     remove(cb: Handler) {
         this.cbs = this.cbs.filter((ocb) => ocb !== cb);
-        this.endCbs = this.endCbs.filter((ocb) => ocb !== cb);
     }
 
-    willTrigger(fullpath :string, val :any, events :HandlerTrigger[]) {
-        for (var i = 0; i < this.cbs.length; i++) {
-            this.cbs[i].willTrigger(fullpath, val, events);
-        }
-        for (var i = 0; i < this.endCbs.length; i++) {
-            this.endCbs[i].willTrigger(fullpath, val, events);
-        }
+    findByType(evtype :string) :Handler[] {
+        return this.cbs.filter((ocb)=>ocb.eventType==evtype);
     }
 
 }
 
-export type HandlerTrigger = () => void;
-
-export interface Handler {
-    init() :void;
-    willTrigger(fullpath :string, val :any, trigger :HandlerTrigger[]) :void;
-}
-
-
-
-export abstract class BaseHandler implements Handler {
+export abstract class Handler {
     public eventType: string;
 
     private initing = false;
@@ -175,6 +223,7 @@ export abstract class BaseHandler implements Handler {
         public tree: RDb3Tree
     ) {
         this.hook();
+        this.init();
     }
 
     matches(eventType?: string, callback?: (dataSnapshot: RDb3Snap, prevChildName?: string) => void, context?: Object) {
@@ -200,93 +249,35 @@ export abstract class BaseHandler implements Handler {
         return this.tree.root.getValue(this.tree.url);
     }
 
-    abstract willTrigger(fullpath :string, val :any, trigger :HandlerTrigger[]) :void;
-
-    // TODO properly implement init hare and in events
-    init() {
-        try {
-            var myval = this.getValue();
-            this.initing = true;
-            var fns :HandlerTrigger[] = [];
-            this.willTrigger(null, myval, fns);
-            this.initing = false;
-            for (var i = 0; i < fns.length; i++) fns[i]();
-        } finally {
-            this.initing = false;
-        }
-    }
-
+    abstract init() :void;
 }
 
-class ValueCbHandler extends BaseHandler {
-    hook() {
-        this.tree.getSubscription().addEnd(this);
-    }
-
+class ValueCbHandler extends Handler {
     init() {
+        this.eventType = 'value';
         this.callback(new RDb3Snap(this.getValue(), this.tree.root, this.tree.url));
     }
-
-    // Value always trigger, whatever happened
-    willTrigger(fullpath :string, val :any, triggers :HandlerTrigger[]) { 
-        triggers.push(()=>this.callback(new RDb3Snap(this.getValue(), this.tree.root, this.tree.url)));
-    }
-
 }
 
-class ChildAddedCbHandler extends BaseHandler {
-
-    willTrigger(fullpath :string, val :any, triggers :HandlerTrigger[]) {
-        if (typeof(val) != 'object') return;
-        var acval = this.getValue();
-        for (var k in val) {
-            if (!acval || !acval[k]) {
-                triggers.push(this.makeTrigger(k));
-            }
-        }
-    }
-
-    private makeTrigger(k :string) {
-        return ()=>{
-            var mysnap = new RDb3Snap(this.getValue(), this.tree.root, this.tree.url);
-            this.callback(mysnap.child(k));
-        };
-    }
-
-}
-
-class ChildRemovedCbHandler extends BaseHandler {
-
-    // This event never triggers on init
-    init() {}
-
-
-    willTrigger(fullpath :string, val :any, triggers :HandlerTrigger[]) :void {
-        var myval = this.getValue();
-        if (!myval || typeof(myval) != 'object') return;
-
+class ChildAddedCbHandler extends Handler {
+    init() {
+        this.eventType = 'child_added';
+        var acv = this.getValue();
         var mysnap = new RDb3Snap(this.getValue(), this.tree.root, this.tree.url);
-        if (isIncomplete(val)) {
-            for (var k in myval) {
-                if (val[k] === null) {
-                    triggers.push(this.makeTrigger(mysnap.child(k)))
-                }
-            }
-        } else {
-            for (var k in myval) {
-                if (!val || !val[k]) {
-                    triggers.push(this.makeTrigger(mysnap.child(k)))
-                }
-            }
-        }
+        var prek :string = null;
+        mysnap.forEach((cs)=>{
+            this.callback(cs,prek);
+            prek = cs.key();
+            return false;
+        });
     }
+}
 
-    private makeTrigger(childSnap :RDb3Snap) {
-        return ()=>{
-            this.callback(childSnap);
-        };
+class ChildRemovedCbHandler extends Handler {
+    init() {
+        this.eventType = 'child_removed';
+        // This event never triggers on init
     }
-
 }
 
 /*
@@ -316,22 +307,10 @@ class ChildMovedCbHandler extends Handler {
 }
 */
 
-class ChildChangedCbHandler extends BaseHandler {
-
-    willTrigger(fullpath :string, val :any, triggers :HandlerTrigger[]) :void {
-        if (typeof(val) != 'object') return;
-        var myval = this.getValue();
-        if (typeof(myval) != 'object') return;
-        for (var k in val) {
-            if (val[k] && myval[k]) triggers.push(this.makeTrigger(k));
-        }
-    }
-
-    private makeTrigger(k :string) {
-        return ()=>{
-            var mysnap = new RDb3Snap(this.getValue(), this.tree.root, this.tree.url);
-            this.callback(mysnap.child(k));
-        };
+class ChildChangedCbHandler extends Handler {
+    init() {
+        this.eventType = 'child_changed';
+        // This event never triggers on init
     }
 }
 
@@ -340,7 +319,7 @@ interface CbHandlerCtor {
         callback: (dataSnapshot: RDb3Snap, prevChildName?: string) => void,
         context: Object,
         tree: RDb3Tree
-    ): BaseHandler;
+    ): Handler;
 }
 
 var cbHandlers = {
@@ -356,9 +335,10 @@ export class RDb3Snap {
     constructor(
         private data: any,
         private root: RDb3Root,
-        private url: string
+        private url: string,
+        reclone = true
     ) {
-        if (data != null && typeof (data) !== undefined) {
+        if (data != null && typeof (data) !== undefined && reclone) {
             this.data = JSON.parse(JSON.stringify(data));
             if (data['$sorter']) this.data['$sorter'] = data['$sorter'];
         } else {
@@ -376,7 +356,7 @@ export class RDb3Snap {
     }
     child(childPath: string): RDb3Snap {
         var subs = findChain(childPath, this.data, true, false);
-        return new RDb3Snap(subs.pop(), this.root, this.url + '/' + Utils.normalizePath(childPath));
+        return new RDb3Snap(subs.pop(), this.root, this.url + Utils.normalizePath(childPath), false);
     }
 
     // TODO ordering
@@ -479,7 +459,7 @@ export class RDb3Tree {
 
     }
 
-    private cbs: BaseHandler[] = [];
+    private cbs: Handler[] = [];
     private qsub: QuerySubscription = null;
 
     getSubscription(): Subscription {
@@ -490,7 +470,6 @@ export class RDb3Tree {
         var ctor: CbHandlerCtor = (<any>cbHandlers)[eventType];
         if (!ctor) throw new Error("Cannot find event " + eventType);
         var handler = new ctor(callback, context, this);
-        handler.eventType = eventType;
         this.cbs.push(handler);
         return callback;
     }

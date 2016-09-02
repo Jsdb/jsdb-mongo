@@ -15,8 +15,6 @@ describe.only('RDb3Client >', () => {
             root = <any>new Client.RDb3Root(null, 'http://ciao/');
         });
 
-
-
         describe('Reading >', () => {
             it('Should not find root non existing data', () => {
                 assert("Should return undefined", root.getValue('/node'), is.undefined);
@@ -229,7 +227,7 @@ describe.only('RDb3Client >', () => {
                 assert("Recevied event data", snap.val(), 'ciao');
             });
 
-            it('Should send a value event for inner changes', () => {
+            it('Should send a value event for inner additions', () => {
                 var ref = root.getUrl('/node');
                 var snap: Client.RDb3Snap;
                 ref.on('value', (data) => snap = data);
@@ -237,15 +235,28 @@ describe.only('RDb3Client >', () => {
 
                 assert("Received event", snap, is.truthy);
                 assert("Snapshot is existing", snap.exists(), true);
-                assert("Recevied event data", snap.val(), is.strictly.object.matching({ data: 'ciao'}));
+                assert("Recevied event data", snap.val(), is.strictly.object.matching({ data: 'ciao' }));
             });
+
+            it('Should send a value event for inner changes', () => {
+                var ref = root.getUrl('/node');
+                root.handleChange('/node/data', 'bau');
+                var snap: Client.RDb3Snap;
+                ref.on('value', (data) => snap = data);
+                root.handleChange('/node/data', 'ciao');
+
+                assert("Received event", snap, is.truthy);
+                assert("Snapshot is existing", snap.exists(), true);
+                assert("Recevied event data", snap.val(), is.strictly.object.matching({ data: 'ciao' }));
+            });
+
         });
 
         describe('Child diff events >', () => {
             it('Should send one child_added from empty', () => {
                 var ref = root.getUrl('/node');
                 var snap: Client.RDb3Snap;
-                ref.on('child_added', (data) => { 
+                ref.on('child_added', (data) => {
                     snap = data;
                 });
                 root.handleChange('/node/data', 'ciao');
@@ -278,66 +289,66 @@ describe.only('RDb3Client >', () => {
                 assert("Received events", snaps, is.array.withLength(0));
             });
 
-			it('Should send initial child_added from existing',()=>{
-				root.handleChange('/node/data','ciao');
-				var ref = root.getUrl('/node');
-				var snap :Client.RDb3Snap;
-				ref.on('child_added', (data)=>snap = data);
-				
-				assert("Received event", snap, is.truthy);
-				assert("Snapshot exists", snap.exists(), true);
-				assert("Recevied event data", snap.val(), 'ciao');
-				assert("Recevied event data", snap.key(), 'data');
-			});
+            it('Should send initial child_added from existing', () => {
+                root.handleChange('/node/data', 'ciao');
+                var ref = root.getUrl('/node');
+                var snap: Client.RDb3Snap;
+                ref.on('child_added', (data) => snap = data);
 
-			it('Should send child_removed on explict parent replace',()=>{
-				root.handleChange('/node/data','ciao');
-				var ref = root.getUrl('/node');
-				var snap :Client.RDb3Snap;
-				ref.on('child_removed', (data)=>snap = data);
-				
-				root.handleChange('/node',{data2:'ciao'});
-				
-				assert("Received event", snap, is.truthy);
-				assert("Snapshot exists", snap.exists(), true);
-				assert("Recevied event data", snap.val(), 'ciao');
-				assert("Recevied event data", snap.key(), 'data');
-			});
+                assert("Received event", snap, is.truthy);
+                assert("Snapshot exists", snap.exists(), true);
+                assert("Recevied event data", snap.val(), 'ciao');
+                assert("Recevied event data", snap.key(), 'data');
+            });
 
-			it('Should send child_removed on partial update',()=>{
-				root.handleChange('/node/data','ciao');
-				var ref = root.getUrl('/node');
-				var snap :Client.RDb3Snap;
-				ref.on('child_removed', (data)=>snap = data);
-				
-				root.handleChange('/node',{data:null, $i: true});
-				
-				assert("Received event", snap, is.truthy);
-				assert("Snapshot exists", snap.exists(), true);
-				assert("Recevied event data", snap.val(), 'ciao');
-				assert("Recevied event data", snap.key(), 'data');
-			});
-			
-			it('Should combine child added, removed and value',()=>{
-				root.handleChange('/list',{a:1,b:2,c:3,d:4});
+            it('Should send child_removed on explict parent replace', () => {
+                root.handleChange('/node/data', 'ciao');
+                var ref = root.getUrl('/node');
+                var snap: Client.RDb3Snap;
+                ref.on('child_removed', (data) => snap = data);
 
-				var ref = root.getUrl('/list');
-				var adds :Client.RDb3Snap[] = [];
-				var rems :Client.RDb3Snap[] = [];
-				
-				ref.on('child_added', (data)=>adds.push(data));
-				ref.on('child_removed', (data)=>rems.push(data));
-				
-				assert("Received initial child_addeds", adds, is.array.withLength(4));
-				assert("Received no initial child_removed", rems, is.array.withLength(0));
-				
-				adds = [];
-				
-				root.handleChange('/list',{a:1,c:3,e:5,f:6});
-				
-				assert("Received new child_addeds", adds, is.array.withLength(2));
-				assert("Received new child_removed", rems, is.array.withLength(2));
-			});
+                root.handleChange('/node', { data2: 'ciao' });
+
+                assert("Received event", snap, is.truthy);
+                assert("Snapshot exists", snap.exists(), true);
+                assert("Recevied event data", snap.val(), 'ciao');
+                assert("Recevied event data", snap.key(), 'data');
+            });
+
+            it('Should send child_removed on partial update', () => {
+                root.handleChange('/node/data', 'ciao');
+                var ref = root.getUrl('/node');
+                var snap: Client.RDb3Snap;
+                ref.on('child_removed', (data) => snap = data);
+
+                root.handleChange('/node', { data: null, $i: true });
+
+                assert("Received event", snap, is.truthy);
+                assert("Snapshot exists", snap.exists(), true);
+                assert("Recevied event data", snap.val(), 'ciao');
+                assert("Recevied event data", snap.key(), 'data');
+            });
+
+            it('Should combine child added, removed and value', () => {
+                root.handleChange('/list', { a: 1, b: 2, c: 3, d: 4 });
+
+                var ref = root.getUrl('/list');
+                var adds: Client.RDb3Snap[] = [];
+                var rems: Client.RDb3Snap[] = [];
+
+                ref.on('child_added', (data) => adds.push(data));
+                ref.on('child_removed', (data) => rems.push(data));
+
+                assert("Received initial child_addeds", adds, is.array.withLength(4));
+                assert("Received no initial child_removed", rems, is.array.withLength(0));
+
+                adds = [];
+
+                root.handleChange('/list', { a: 1, c: 3, e: 5, f: 6 });
+
+                assert("Received new child_addeds", adds, is.array.withLength(2));
+                assert("Received new child_removed", rems, is.array.withLength(2));
+            });
 
             /*
 			it('Should send child_moved',()=>{
@@ -353,36 +364,36 @@ describe.only('RDb3Client >', () => {
 				//assert("Received new child_moved", movs, is.withLength(3));
 			});
             */
-			
-			it('Should send child_changed',()=>{
-				root.handleChange('/list',{a:1,b:2,c:3});
 
-				var ref = root.getUrl('/list');
-				var movs :Client.RDb3Snap[] = [];
-				
-				ref.on('child_changed', (data)=>movs.push(data));
-				
-				assert("Received no initial child_changed", movs, is.array.withLength(0));
-				
-				root.handleChange('/list',{b:2,a:1,c:4});
-				
-				assert("Received new child_changed", movs, is.array.withLength(1));
-			});
-			
-			it('Should send child_changed for deep change',()=>{
-				root.handleChange('/list',{a:{val:1},b:{val:2},c:{val:3}});
+            it('Should send child_changed', () => {
+                root.handleChange('/list', { a: 1, b: 2, c: 3 });
 
-				var ref = root.getUrl('/list');
-				var movs :Client.RDb3Snap[] = [];
-				
-				ref.on('child_changed', (data)=>movs.push(data));
-				
-				assert("Received no initial child_changed", movs, is.array.withLength(0));
-				
-				root.handleChange('/list',{b:{val:2},a:{val:1},c:{val:4}});
-				
-				assert("Received new child_changed", movs, is.array.withLength(1));
-			});
+                var ref = root.getUrl('/list');
+                var movs: Client.RDb3Snap[] = [];
+
+                ref.on('child_changed', (data) => movs.push(data));
+
+                assert("Received no initial child_changed", movs, is.array.withLength(0));
+
+                root.handleChange('/list', { b: 2, a: 1, c: 4 });
+
+                assert("Received new child_changed", movs, is.array.withLength(1));
+            });
+
+            it('Should send child_changed for deep change', () => {
+                root.handleChange('/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } });
+
+                var ref = root.getUrl('/list');
+                var movs: Client.RDb3Snap[] = [];
+
+                ref.on('child_changed', (data) => movs.push(data));
+
+                assert("Received no initial child_changed", movs, is.array.withLength(0));
+
+                root.handleChange('/list', { b: { val: 2 }, a: { val: 1 }, c: { val: 4 } });
+
+                assert("Received new child_changed", movs, is.array.withLength(1));
+            });
         });
 
 
