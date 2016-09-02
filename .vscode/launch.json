@@ -6,12 +6,14 @@
 		{
 			"name": "Attach",
 			"type": "node",
+			"request": "attach",
 			// TCP/IP address. Default is "localhost".
 			"address": "localhost",
 			// Port to attach to.
 			"port": 5858,
 			"sourceMaps": true,
-			"outDir": "js"
+			"outDir": "${workspaceRoot}/js",
+			"localRoot": "${workspaceRoot}"
 		}
 	]
 }
