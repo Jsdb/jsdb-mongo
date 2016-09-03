@@ -1040,19 +1040,11 @@ class InternalSocket extends EventEmitter implements Socket {
     }
     
     emit(name :string, ...args :any[]) :boolean {
-        console.log(this.role, name);
         var lstnrs = this.other.listeners(name);
-        /*
-        var cb :Function;
-        if (typeof(args[args.length-1]) == 'function') {
-            cb = args.pop();
-        }
-        */
         var val :any;
         for (var i = 0; i < lstnrs.length; i++) {
             val = lstnrs[i].apply(this, args);
         }
-        //if (cb) cb(val);
         return !!lstnrs.length;
     }
 

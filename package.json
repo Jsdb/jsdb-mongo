@@ -1,9 +1,9 @@
 {
-  "name": "jsdb-mongodb",
+  "name": "jsdb-mongo",
   "version": "1.0.0",
   "description": "",
   "gulp_data": {
-    "fullName": "jsdb-mongodb"
+    "fullName": "jsdb-mongo"
   },
   "main": "js/main/Broker.js",
   "scripts": {

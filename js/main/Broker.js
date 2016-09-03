@@ -1,5 +1,5 @@
 /**
- * TSDB Mongo 20160902_183243_master_1.0.0_5d9f9c3
+ * TSDB Mongo 20160903_173700_master_1.0.0_8a99d82
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -24,7 +24,7 @@ var __extends = (this && this.__extends) || function (d, b) {
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
-    exports.VERSION = "20160902_183243_master_1.0.0_5d9f9c3";
+    exports.VERSION = "20160903_173700_master_1.0.0_8a99d82";
     var NopAuthService = (function () {
         function NopAuthService() {
         }
@@ -951,19 +951,11 @@ var __extends = (this && this.__extends) || function (d, b) {
             for (var _i = 1; _i < arguments.length; _i++) {
                 args[_i - 1] = arguments[_i];
             }
-            console.log(this.role, name);
             var lstnrs = this.other.listeners(name);
-            /*
-            var cb :Function;
-            if (typeof(args[args.length-1]) == 'function') {
-                cb = args.pop();
-            }
-            */
             var val;
             for (var i = 0; i < lstnrs.length; i++) {
                 val = lstnrs[i].apply(this, args);
             }
-            //if (cb) cb(val);
             return !!lstnrs.length;
         };
         return InternalSocket;
