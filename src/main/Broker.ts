@@ -150,6 +150,9 @@ export class Broker {
             // Hook the oplog
             dbgBroker("Hooking on oplog");
             return this.hookOplog();
+        }).catch((err)=>{
+            console.warn(err);
+            return Promise.reject(err);
         });
     }
 

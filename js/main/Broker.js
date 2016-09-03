@@ -1,5 +1,5 @@
 /**
- * TSDB Mongo 20160903_173700_master_1.0.0_8a99d82
+ * TSDB Mongo 20160903_235021_master_1.0.0_b88e94b
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -24,7 +24,7 @@ var __extends = (this && this.__extends) || function (d, b) {
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
-    exports.VERSION = "20160903_173700_master_1.0.0_8a99d82";
+    exports.VERSION = "20160903_235021_master_1.0.0_b88e94b";
     var NopAuthService = (function () {
         function NopAuthService() {
         }
@@ -127,6 +127,9 @@ var __extends = (this && this.__extends) || function (d, b) {
                 // Hook the oplog
                 dbgBroker("Hooking on oplog");
                 return _this.hookOplog();
+            }).catch(function (err) {
+                console.warn(err);
+                return Promise.reject(err);
             });
         };
         Broker.prototype.handle = function (sock, authData) {
