@@ -527,6 +527,28 @@ describe("Broker >", function () {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
                 });
             });
+            it('should fetch root', function () {
+                var cc = null;
+                return getConnectedClient().then(function (ncc) {
+                    cc = ncc;
+                    cc.eventCheck = checkEvents(cc.connection, [
+                        {
+                            event: 'v',
+                            match: tsmatchers_1.is.object.matching({
+                                v: {
+                                    users: tsmatchers_1.is.defined
+                                }
+                            })
+                        }
+                    ]);
+                    return sendCommand(cc, 'sp', '/');
+                }).then(function (ack) {
+                    tsmatchers_1.assert("Got ack from the sub", ack, 'k');
+                    return cc.eventCheck;
+                }).then(function (evts) {
+                    console.log(evts);
+                });
+            });
         });
         describe("Path notify >", function () {
             it('Should notify of changes on a simple object', function (done) {
@@ -821,6 +843,19 @@ describe("Broker >", function () {
                     expect.push({ event: 'qd', match: tsmatchers_1.is.defined });
                     cc.eventCheck = checkEvents(cc.connection, expect);
                     var def = { id: 'q1', path: '/vals' };
+                    var state = new Broker_1.SimpleQueryState(cc.handler, cc.broker, def);
+                    cc.broker.query(state);
+                    return cc.eventCheck;
+                    //}).then((evts)=>{
+                    //    console.log(evts);
+                });
+            });
+            it('Should return nothing if nothing found', function () {
+                return getConnectedClient().then(function (cc) {
+                    var expect = [];
+                    expect.push({ event: 'qd', match: tsmatchers_1.is.defined });
+                    cc.eventCheck = checkEvents(cc.connection, expect);
+                    var def = { id: 'q1', path: '/isnotthere' };
                     var state = new Broker_1.SimpleQueryState(cc.handler, cc.broker, def);
                     cc.broker.query(state);
                     return cc.eventCheck;

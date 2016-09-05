@@ -98,6 +98,7 @@ export declare class SimpleQueryState implements Subscriber {
     found(path: string, data: any): void;
     exited(path: string, ind?: number): void;
     foundEnd(): void;
+    checkEnd(): void;
     checkExit(path: string): void;
     sendValue(path: string, val: any, extra?: any): void;
 }

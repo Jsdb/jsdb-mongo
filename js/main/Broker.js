@@ -1,5 +1,5 @@
 /**
- * TSDB Mongo 20160903_235021_master_1.0.0_b88e94b
+ * TSDB Mongo 20160905_170738_master_1.0.0_21874a2
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -24,7 +24,7 @@ var __extends = (this && this.__extends) || function (d, b) {
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
-    exports.VERSION = "20160903_235021_master_1.0.0_b88e94b";
+    exports.VERSION = "20160905_170738_master_1.0.0_21874a2";
     var NopAuthService = (function () {
         function NopAuthService() {
         }
@@ -79,6 +79,9 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.startWait.push(Mongo.MongoClient.connect(collectionDb, collectionOptions).then(function (db) {
                 _this.collectionDb = db;
                 _this.collection = _this.collectionDb.collection(collectionName);
+            }).catch(function (err) {
+                console.warn("Error opening collection connection", err);
+                return Promise.reject(err);
             }));
             return this;
         };
@@ -89,6 +92,9 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.startWait.push(Mongo.MongoClient.connect(oplogDb).then(function (db) {
                 _this.oplogDb = db;
                 _this.oplog = _this.oplogDb.collection('oplog.rs');
+            }).catch(function (err) {
+                console.warn("Error opening oplog connection", err);
+                return Promise.reject(err);
             }));
             return this;
         };
@@ -127,9 +133,6 @@ var __extends = (this && this.__extends) || function (d, b) {
                 // Hook the oplog
                 dbgBroker("Hooking on oplog");
                 return _this.hookOplog();
-            }).catch(function (err) {
-                console.warn(err);
-                return Promise.reject(err);
             });
         };
         Broker.prototype.handle = function (sock, authData) {
@@ -336,8 +339,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             path = Utils.normalizePath(path);
             if (val === null) {
                 var leaf = Utils.leafPath(path);
-                if (!leaf)
-                    throw new Error('Cannot write a primitive value on root');
+                //if (!leaf) throw new Error('Cannot write a primitive value on root');
                 var par = Utils.parentPath(path);
                 dbgBroker("Unsetting %s -> %s", par, leaf);
                 var obj = {};
@@ -446,12 +448,12 @@ var __extends = (this && this.__extends) || function (d, b) {
                 }
                 _this.collection.findOne({ _id: Utils.parentPath(path) }).then(function (val) {
                     if (val == null) {
-                        dbgBroker("Found no value on parent path");
+                        dbgBroker("Found no value on path %s using parent", path);
                         handler.sendValue(path, null, extra);
                     }
                     else {
                         var leaf = Utils.leafPath(path);
-                        dbgBroker("Found %s on parent path", val[leaf]);
+                        dbgBroker("Found %s on path %s using parent", val[leaf], path);
                         handler.sendValue(path, val[leaf], extra);
                     }
                 });
@@ -478,7 +480,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                         qo[leafField].$lt = def.to;
                 }
             }
-            dbgBroker("Query object %o", qo);
+            dbgBroker("%s query object %o", queryState.id, qo);
             var cursor = this.collection.find(qo);
             var sortobj = {};
             if (def.compareField && typeof (def.equals) == 'undefined') {
@@ -499,7 +501,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             });
             cursor.on('end', function () {
                 queryState.foundEnd();
-                console.log('done!');
+                dbgBroker("%s cursor end", def.id);
             });
         };
         return Broker;
@@ -681,10 +683,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.broker.subscribe(this.forwarder, path);
             this.broker.fetch(this.forwarder, path, { q: this.id, aft: prePath }).then(function () {
                 _this.fetchingCnt--;
-                if (_this.fetchingCnt == 0 && _this.fetchEnded) {
-                    _this.forwarder.stopSorting();
-                    _this.handler.queryFetchEnd(_this.id);
-                }
+                _this.checkEnd();
             });
         };
         SimpleQueryState.prototype.exited = function (path, ind) {
@@ -702,6 +701,13 @@ var __extends = (this && this.__extends) || function (d, b) {
         };
         SimpleQueryState.prototype.foundEnd = function () {
             this.fetchEnded = true;
+            this.checkEnd();
+        };
+        SimpleQueryState.prototype.checkEnd = function () {
+            if (this.fetchingCnt == 0 && this.fetchEnded) {
+                this.forwarder.stopSorting();
+                this.handler.queryFetchEnd(this.id);
+            }
         };
         SimpleQueryState.prototype.checkExit = function (path) {
             for (var i = 0; i < this.invalues.length; i++) {
@@ -760,6 +766,11 @@ var __extends = (this && this.__extends) || function (d, b) {
         return SimpleQueryState;
     }());
     exports.SimpleQueryState = SimpleQueryState;
+    function filterAck(fn, val) {
+        if (!fn || typeof fn !== 'function')
+            return;
+        fn(val);
+    }
     // Does not need to export, but there are no friendly/package/module accessible methods, and Broker.subscribe will complain is Handler is private
     var Handler = (function () {
         function Handler(socket, authData, broker) {
@@ -772,11 +783,12 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.pathSubs = {};
             this.queries = {};
             this.id = socket.id.substr(2);
-            socket.on('sp', function (path, fn) { return fn(_this.subscribePath(path)); });
-            socket.on('up', function (path, fn) { return fn(_this.unsubscribePath(path)); });
-            socket.on('pi', function (id, fn) { return fn(_this.ping(id)); });
-            socket.on('sq', function (def, fn) { return fn(_this.subscribeQuery(def)); });
-            socket.on('uq', function (id, fn) { return fn(_this.unsubscribeQuery(id)); });
+            dbgHandler("%s handler created", this.id);
+            socket.on('sp', function (path, fn) { return filterAck(fn, _this.subscribePath(path)); });
+            socket.on('up', function (path, fn) { return filterAck(fn, _this.unsubscribePath(path)); });
+            socket.on('pi', function (id, fn) { return filterAck(fn, _this.ping(id)); });
+            socket.on('sq', function (def, fn) { return filterAck(fn, _this.subscribeQuery(def)); });
+            socket.on('uq', function (id, fn) { return filterAck(fn, _this.unsubscribeQuery(id)); });
             socket.on('s', function (path, val, fn) { return _this.set(path, val, fn); });
             socket.on('m', function (path, val, fn) { return _this.merge(path, val, fn); });
             socket.on('disconnect', function () {
@@ -857,7 +869,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         Handler.prototype.set = function (path, val, cb) {
             dbgHandler("%s writing in %s %o", this.id, path, val);
             // TODO security here
-            this.broker.set(this, path, val).then(function () { return cb('k'); }).catch(function (e) {
+            this.broker.set(this, path, val).then(function () { return filterAck(cb, 'k'); }).catch(function (e) {
                 dbgHandler("Got error", e);
                 // TODO how to handle errors?
             });
@@ -865,24 +877,33 @@ var __extends = (this && this.__extends) || function (d, b) {
         Handler.prototype.merge = function (path, val, cb) {
             dbgHandler("%s merging in %s %o", this.id, path, val);
             // TODO security here
-            this.broker.merge(this, path, val).then(function () { return cb('k'); }).catch(function (e) {
+            this.broker.merge(this, path, val).then(function () { return filterAck(cb, 'k'); }).catch(function (e) {
                 dbgHandler("Got error", e);
                 // TODO how to handle errors?
             });
         };
         Handler.prototype.sendValue = function (path, val, extra) {
+            if (this.closed)
+                return;
             // TODO evaluate query matching
             // TODO security filter here?
             var msg = { p: path, v: val };
             for (var k in extra) {
                 msg[k] = extra[k];
             }
+            dbgHandler("%s sending value %o", this.id, msg);
             this.socket.emit('v', msg);
         };
         Handler.prototype.queryFetchEnd = function (queryId) {
+            if (this.closed)
+                return;
+            dbgHandler("%s sending query end %s", this.id, queryId);
             this.socket.emit('qd', { q: queryId });
         };
         Handler.prototype.queryExit = function (path, queryId) {
+            if (this.closed)
+                return;
+            dbgHandler("%s sending query exit %s:%s", this.id, queryId, path);
             this.socket.emit('qx', { q: queryId, p: path });
         };
         return Handler;
@@ -956,8 +977,15 @@ var __extends = (this && this.__extends) || function (d, b) {
             }
             var lstnrs = this.other.listeners(name);
             var val;
+            // Add a do-nothing callback, in case the listener expects it but the emitter didn't provide a real one
+            args.push(function () { });
             for (var i = 0; i < lstnrs.length; i++) {
-                val = lstnrs[i].apply(this, args);
+                try {
+                    val = lstnrs[i].apply(this, args);
+                }
+                catch (e) {
+                    dbgSocket('Internal socket emit %s error %o', name, e);
+                }
             }
             return !!lstnrs.length;
         };
