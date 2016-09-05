@@ -60,7 +60,10 @@ export class Broker {
 
     private handlers :{[index:string]:Handler} = {};
     private subscriptions :{[index:string]:{[index:string]:Subscriber}} = {};
-    private lastOplogStream :Mongo.Cursor;
+
+    private oplogMaxtime :Mongo.Timestamp = null;
+    private oplogStream :Mongo.Cursor = null;
+
 
     constructor($socket?: SocketIO.Server, collectionDb?: string, collectionName?: string, oplogDb?: string, collectionOptions? :any) {
         dbgBroker("Created broker %s", this.id);
@@ -101,6 +104,9 @@ export class Broker {
         this.startWait.push(Mongo.MongoClient.connect(collectionDb, collectionOptions).then((db)=>{
             this.collectionDb = db;
             this.collection = this.collectionDb.collection(collectionName);
+        }).catch((err)=>{
+            console.warn("Error opening collection connection",err);
+            return Promise.reject(err);
         }));
         return this;
     }
@@ -110,6 +116,9 @@ export class Broker {
         this.startWait.push(Mongo.MongoClient.connect(oplogDb).then((db)=>{
             this.oplogDb = db;
             this.oplog = this.oplogDb.collection('oplog.rs');
+        }).catch((err)=>{
+            console.warn("Error opening oplog connection",err);
+            return Promise.reject(err);
         }));
         return this;
     }
@@ -150,9 +159,6 @@ export class Broker {
             // Hook the oplog
             dbgBroker("Hooking on oplog");
             return this.hookOplog();
-        }).catch((err)=>{
-            console.warn(err);
-            return Promise.reject(err);
         });
     }
 
@@ -169,13 +175,22 @@ export class Broker {
     private hookOplog() :Promise<any> {
         if (!this.oplog) return;
         if (this.closed) return;
-        return this.oplog.find({}).project({ts:1}).sort({$natural:-1}).limit(1).toArray().then((max)=>{
+        var findMaxProm :Promise<Mongo.Timestamp> = null;
+        if (!this.oplogMaxtime) {
+            findMaxProm = this.oplog.find({}).project({ts:1}).sort({$natural:-1}).limit(1).toArray().then((max)=>{
+                var maxtime = new Mongo.Timestamp(0, Math.floor(new Date().getTime() / 1000));
+                if (max && max.length && max[0].ts) maxtime = max[0].ts;
+                return maxtime;
+            });
+        } else {
+            findMaxProm = Promise.resolve(this.oplogMaxtime);
+        }
+        return findMaxProm.then((maxtime)=>{
             if (this.closed) return;
-            var maxtime = new Mongo.Timestamp(0, Math.floor(new Date().getTime() / 1000));
-            if (max && max.length && max[0].ts) maxtime = max[0].ts;
-            var oplogStream = this.oplog
+            if (this.oplogStream) this.oplogStream.close();
+            var oplogStream = this.oplogStream = this.oplog
                 .find({ts:{$gt:maxtime}})
-                .project({op:1,o:1,o2:1})
+                .project({op:1,o:1,o2:1,ts:1})
                 .addCursorFlag('tailable', true)
                 .addCursorFlag('awaitData', true)
                 .addCursorFlag('oplogReplay', true)
@@ -184,6 +199,7 @@ export class Broker {
             oplogStream.on('data', (d:any)=>{
                 // Find and notify registered handlers
                 dbgOplog('%s : %o', this.id, d);
+                this.oplogMaxtime = d.ts;
                 if (d.op == 'i') {
                     // It's an insert of new data
                     this.broadcast(d.o._id, d.o);
@@ -216,15 +232,16 @@ export class Broker {
             oplogStream.on('close', ()=>{
                 // Re-hook
                 if (this.closed) return;
-                dbgBroker("Re-hooking on oplog after a close event");
-                this.hookOplog();
+                if (this.oplogStream === oplogStream) {
+                    dbgBroker("Re-hooking on oplog after a close event");
+                    this.hookOplog();
+                }
             });
             oplogStream.on('error', (e:any)=>{
                 // Re-hook
                 dbgBroker("Re-hooking on oplog after error", e);
-                this.hookOplog();
+                oplogStream.close();
             });
-            this.lastOplogStream = oplogStream;
         });
     }
 
@@ -314,8 +331,8 @@ export class Broker {
 
         var proms :Promise<any>[] = [];
 
-        if (this.lastOplogStream) {
-            proms.push(this.lastOplogStream.close());
+        if (this.oplogStream) {
+            proms.push(this.oplogStream.close());
         }
 
         var handlerKeys = Object.getOwnPropertyNames(this.handlers);
@@ -338,6 +355,7 @@ export class Broker {
                 }
             }
         }
+        if (ops.length == 0) return Promise.resolve(null);
         return this.collection.bulkWrite(ops);
     }
 
@@ -359,7 +377,7 @@ export class Broker {
         path = Utils.normalizePath(path);
         if (val === null) {
             var leaf = Utils.leafPath(path);
-            if (!leaf) throw new Error('Cannot write a primitive value on root');
+            //if (!leaf) throw new Error('Cannot write a primitive value on root');
             var par = Utils.parentPath(path);
             dbgBroker("Unsetting %s -> %s", par, leaf);
             var obj :any = {};
@@ -471,11 +489,11 @@ export class Broker {
                 } 
                 this.collection.findOne({_id:Utils.parentPath(path)}).then((val)=>{
                     if (val == null) {
-                        dbgBroker("Found no value on parent path");
+                        dbgBroker("Found no value on path %s using parent", path);
                         handler.sendValue(path, null, extra);
                     } else {
                         var leaf = Utils.leafPath(path);
-                        dbgBroker("Found %s on parent path", val[leaf]);
+                        dbgBroker("Found %s on path %s using parent", val[leaf], path);
                         handler.sendValue(path, val[leaf], extra);
                     }
                 });
@@ -503,7 +521,7 @@ export class Broker {
             }
         }
 
-        dbgBroker("Query object %o", qo);
+        dbgBroker("%s query object %o", queryState.id, qo);
 
         var cursor = this.collection.find(qo);
 
@@ -529,7 +547,7 @@ export class Broker {
         });
         cursor.on('end', ()=>{
             queryState.foundEnd();
-            console.log('done!');
+            dbgBroker("%s cursor end", def.id);
         });
     }
 
@@ -743,10 +761,7 @@ export class SimpleQueryState implements Subscriber {
         this.broker.subscribe(this.forwarder, path);
         this.broker.fetch(this.forwarder, path, {q:this.id, aft:prePath}).then(()=>{
             this.fetchingCnt--;
-            if (this.fetchingCnt == 0 && this.fetchEnded) {
-                this.forwarder.stopSorting();
-                this.handler.queryFetchEnd(this.id);
-            }
+            this.checkEnd();
         });
     }
 
@@ -766,6 +781,14 @@ export class SimpleQueryState implements Subscriber {
 
     foundEnd() {
         this.fetchEnded = true;
+        this.checkEnd();
+    }
+
+    checkEnd() {
+        if (this.fetchingCnt == 0 && this.fetchEnded) {
+            this.forwarder.stopSorting();
+            this.handler.queryFetchEnd(this.id);
+        }
     }
 
 
@@ -819,6 +842,10 @@ export class SimpleQueryState implements Subscriber {
 
 }
 
+function filterAck(fn :Function, val :any) {
+    if (!fn || typeof fn !== 'function') return;
+    fn(val);
+}
 
 // Does not need to export, but there are no friendly/package/module accessible methods, and Broker.subscribe will complain is Handler is private
 export class Handler implements Subscriber {
@@ -828,6 +855,17 @@ export class Handler implements Subscriber {
     private pathSubs :{[index:string]:boolean} = {};
     private queries :{[index:string]:SimpleQueryState} = {};
 
+    // TODO a read-write lock that avoids sending to the client stale data.
+    /*
+     Approximate rules should be :
+        - When a read arrive
+            - If a write is in progress or in queue, store the read in a queue
+            - Start the read, count number of ongoing reads
+        - When a write arrive
+            - If reads or writes are in progress, store the write in a queue
+        - When there are no ongoing reads, dequeue one at a time the write operations
+        - Where there are no ongoing writes, start simultaneously all the read operations
+     */
  
     constructor(
         private socket :Socket,
@@ -835,12 +873,14 @@ export class Handler implements Subscriber {
         private broker :Broker
     ) {
         this.id = socket.id.substr(2);
-        socket.on('sp', (path:string,fn:Function)=>fn(this.subscribePath(path)));
-        socket.on('up', (path:string,fn:Function)=>fn(this.unsubscribePath(path)));
-        socket.on('pi', (id:string,fn:Function)=>fn(this.ping(id)));
+        dbgHandler("%s handler created", this.id);
 
-        socket.on('sq', (def:SimpleQueryDef,fn:Function)=>fn(this.subscribeQuery(def)));
-        socket.on('uq', (id:string,fn:Function)=>fn(this.unsubscribeQuery(id)));
+        socket.on('sp', (path:string,fn:Function)=>filterAck(fn,this.subscribePath(path)));
+        socket.on('up', (path:string,fn:Function)=>filterAck(fn,this.unsubscribePath(path)));
+        socket.on('pi', (id:string,fn:Function)=>filterAck(fn,this.ping(id)));
+
+        socket.on('sq', (def:SimpleQueryDef,fn:Function)=>filterAck(fn,this.subscribeQuery(def)));
+        socket.on('uq', (id:string,fn:Function)=>filterAck(fn,this.unsubscribeQuery(id)));
         
         socket.on('s', (path:string, val :any, fn:Function)=>this.set(path,val, fn));
         socket.on('m', (path:string, val :any, fn:Function)=>this.merge(path,val, fn));
@@ -934,7 +974,7 @@ export class Handler implements Subscriber {
     set(path :string, val :any, cb :Function) {
         dbgHandler("%s writing in %s %o", this.id, path, val);
         // TODO security here
-        this.broker.set(this, path, val).then(()=>cb('k')).catch((e)=>{
+        this.broker.set(this, path, val).then(()=>filterAck(cb,'k')).catch((e)=>{
             dbgHandler("Got error", e);
             // TODO how to handle errors?
         });
@@ -943,27 +983,33 @@ export class Handler implements Subscriber {
     merge(path :string, val :any, cb :Function) {
         dbgHandler("%s merging in %s %o", this.id, path, val);
         // TODO security here
-        this.broker.merge(this, path, val).then(()=>cb('k')).catch((e)=>{
+        this.broker.merge(this, path, val).then(()=>filterAck(cb,'k')).catch((e)=>{
             dbgHandler("Got error", e);
             // TODO how to handle errors?
         });
     }
 
     sendValue(path :string, val :any, extra? :any) {
+        if (this.closed) return;
         // TODO evaluate query matching
         // TODO security filter here?
         var msg :any = {p:path,v:val};
         for (var k in extra) {
             msg[k] = extra[k];
         }
+        dbgHandler("%s sending value %o", this.id, msg);
         this.socket.emit('v', msg);
     }
 
     queryFetchEnd(queryId :string) {
+        if (this.closed) return;
+        dbgHandler("%s sending query end %s", this.id, queryId);
         this.socket.emit('qd', {q:queryId});
     }
 
     queryExit(path :string, queryId :string) {
+        if (this.closed) return;
+        dbgHandler("%s sending query exit %s:%s", this.id, queryId, path);
         this.socket.emit('qx', {q:queryId, p: path});
     }
 }
@@ -1045,8 +1091,14 @@ class InternalSocket extends EventEmitter implements Socket {
     emit(name :string, ...args :any[]) :boolean {
         var lstnrs = this.other.listeners(name);
         var val :any;
+        // Add a do-nothing callback, in case the listener expects it but the emitter didn't provide a real one
+        args.push(()=>{});
         for (var i = 0; i < lstnrs.length; i++) {
-            val = lstnrs[i].apply(this, args);
+            try {
+                val = lstnrs[i].apply(this, args);
+            } catch (e) {
+                dbgSocket('Internal socket emit %s error %o', name, e);
+            }
         }
         return !!lstnrs.length;
     }

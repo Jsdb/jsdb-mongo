@@ -611,6 +611,30 @@ describe("Broker >", ()=>{
                     assert('acked correctly', ack, 'k');
                 });
             });
+
+            it('should fetch root', ()=>{
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.eventCheck = checkEvents(cc.connection,
+                    [
+                        {
+                            event: 'v',
+                            match: is.object.matching({
+                                v: {
+                                    users: is.defined
+                                }
+                            })
+                        }
+                    ]);
+                    return sendCommand(cc, 'sp', '/');
+                }).then((ack)=>{
+                    assert("Got ack from the sub", ack, 'k');
+                    return cc.eventCheck;
+                }).then((evts)=>{
+                    console.log(evts);
+                });
+            })
         });
 
         describe("Path notify >", ()=>{
@@ -916,6 +940,21 @@ describe("Broker >", ()=>{
 
                     cc.eventCheck = checkEvents(cc.connection, expect);
                     var def = {id:'q1',path:'/vals'};
+                    var state = new SimpleQueryState(cc.handler, cc.broker, def);
+                    cc.broker.query(state);
+                    return cc.eventCheck;
+                //}).then((evts)=>{
+                //    console.log(evts);
+                });
+            });
+
+            it('Should return nothing if nothing found', ()=>{
+                return getConnectedClient().then((cc)=>{
+                    var expect :SocketEvent[] = [];
+                    expect.push({event:'qd',match:is.defined});
+
+                    cc.eventCheck = checkEvents(cc.connection, expect);
+                    var def = {id:'q1',path:'/isnotthere'};
                     var state = new SimpleQueryState(cc.handler, cc.broker, def);
                     cc.broker.query(state);
                     return cc.eventCheck;
