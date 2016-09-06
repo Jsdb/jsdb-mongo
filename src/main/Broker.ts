@@ -855,6 +855,11 @@ export class Handler implements Subscriber {
     private pathSubs :{[index:string]:boolean} = {};
     private queries :{[index:string]:SimpleQueryState} = {};
 
+    private ongoingReads :{[index:string]:boolean} = {};
+    private ongoingWrite :Function = null;
+    private writeQueue :Function[] = [];
+    private readQueue :Function[] = [];
+
     // TODO a read-write lock that avoids sending to the client stale data.
     /*
      Approximate rules should be :
@@ -866,6 +871,9 @@ export class Handler implements Subscriber {
         - When there are no ongoing reads, dequeue one at a time the write operations
         - Where there are no ongoing writes, start simultaneously all the read operations
      */
+
+
+
  
     constructor(
         private socket :Socket,
@@ -875,15 +883,15 @@ export class Handler implements Subscriber {
         this.id = socket.id.substr(2);
         dbgHandler("%s handler created", this.id);
 
-        socket.on('sp', (path:string,fn:Function)=>filterAck(fn,this.subscribePath(path)));
+        socket.on('sp', (path:string,fn:Function)=>this.enqueueRead(()=>filterAck(fn,this.subscribePath(path))));
         socket.on('up', (path:string,fn:Function)=>filterAck(fn,this.unsubscribePath(path)));
         socket.on('pi', (id:string,fn:Function)=>filterAck(fn,this.ping(id)));
 
-        socket.on('sq', (def:SimpleQueryDef,fn:Function)=>filterAck(fn,this.subscribeQuery(def)));
+        socket.on('sq', (def:SimpleQueryDef,fn:Function)=>this.enqueueRead(()=>filterAck(fn,this.subscribeQuery(def))));
         socket.on('uq', (id:string,fn:Function)=>filterAck(fn,this.unsubscribeQuery(id)));
         
-        socket.on('s', (path:string, val :any, fn:Function)=>this.set(path,val, fn));
-        socket.on('m', (path:string, val :any, fn:Function)=>this.merge(path,val, fn));
+        socket.on('s', (path:string, val :any, fn:Function)=>this.enqueueWrite(()=>this.set(path,val, fn)));
+        socket.on('m', (path:string, val :any, fn:Function)=>this.enqueueWrite(()=>this.merge(path,val, fn)));
 
         socket.on('disconnect', ()=>{
             this.close();
@@ -895,6 +903,46 @@ export class Handler implements Subscriber {
         socket.on('aa', ()=>{socket.emit('aa')});
     }
 
+    private enqueueRead(fn :Function) {
+        // If no write operation in the queue (waiting or executing) fire the read
+        if (this.writeQueue.length == 0) return fn();
+        // Otherwise queue the read
+        this.readQueue.push(fn);
+
+        dbgHandler("%s enqueued read operation, now %s in queue", this.id, this.readQueue.length);
+    }
+
+    private enqueueWrite(fn :Function) {
+        // Anyway put the write in the queue
+        this.writeQueue.push(fn);
+
+        dbgHandler("%s enqueued write operation, now %s in queue", this.id, this.writeQueue.length);
+
+        this.dequeue();
+    }
+
+    private dequeue() {
+        // If there is something in the write queue, fire it
+        if (this.writeQueue.length) {
+            // If there are no reads going on
+            for (var k in this.ongoingReads) return;
+            // If there is no write already going on 
+            if (this.ongoingWrite) return;
+            // Fire the write
+            dbgHandler("%s dequeuing write operation", this.id);
+            this.ongoingWrite = this.writeQueue.shift();
+            this.ongoingWrite();
+            return;
+        }
+        // Otherwise fire all reads
+        var readfn :Function = null;
+        while ((readfn = this.readQueue.pop())) {
+            dbgHandler("%s dequeuing write operation", this.id);
+            readfn();
+        }
+    }
+
+
     updateAuthData(data :any) {
         this.authData = data;
     }
@@ -904,6 +952,8 @@ export class Handler implements Subscriber {
         if (this.closed) return;
         this.closed = true;
         this.socket.removeAllListeners();
+        this.readQueue = null;
+        this.writeQueue = null;
         this.socket = null;
 
         for (var k in this.pathSubs) {
@@ -928,6 +978,7 @@ export class Handler implements Subscriber {
         dbgHandler("%s subscribing to %s", this.id, path);
         this.pathSubs[path] = true;
         this.broker.subscribe(this, path);
+        this.ongoingReads[path] = true;
         this.broker.fetch(this, path);
         return 'k';
     }
@@ -938,6 +989,7 @@ export class Handler implements Subscriber {
         }
         dbgHandler("%s unsubscribing from %s", this.id, path);
         delete this.pathSubs[path];
+        delete this.ongoingReads[path];
         this.broker.unsubscribe(this, path);
         return 'k';
     }
@@ -948,6 +1000,7 @@ export class Handler implements Subscriber {
             return 'k';
         }
         dbgHandler("%s subscribing query to %s", this.id, def.path);
+        this.ongoingReads['$q' + def.id] = true;
         var state = new SimpleQueryState(this, this.broker, def);
         this.queries[def.id] = state;
         state.start();
@@ -962,6 +1015,7 @@ export class Handler implements Subscriber {
         }
         dbgHandler("%s unsubscribing from query %s", this.id, id);
         state.stop();
+        delete this.ongoingReads['$q' + id];
         delete this.queries[id];
         return 'k';
     }
@@ -974,7 +1028,15 @@ export class Handler implements Subscriber {
     set(path :string, val :any, cb :Function) {
         dbgHandler("%s writing in %s %o", this.id, path, val);
         // TODO security here
-        this.broker.set(this, path, val).then(()=>filterAck(cb,'k')).catch((e)=>{
+        this.broker.set(this, path, val)
+        .then(()=>{
+            this.ongoingWrite = null;
+            this.dequeue();
+            filterAck(cb,'k');
+        })
+        .catch((e)=>{
+            this.ongoingWrite = null;
+            this.dequeue();
             dbgHandler("Got error", e);
             // TODO how to handle errors?
         });
@@ -983,7 +1045,15 @@ export class Handler implements Subscriber {
     merge(path :string, val :any, cb :Function) {
         dbgHandler("%s merging in %s %o", this.id, path, val);
         // TODO security here
-        this.broker.merge(this, path, val).then(()=>filterAck(cb,'k')).catch((e)=>{
+        this.broker.merge(this, path, val)
+        .then(()=>{
+            this.ongoingWrite = null;
+            this.dequeue();
+            filterAck(cb,'k');
+        })
+        .catch((e)=>{
+            this.ongoingWrite = null;
+            this.dequeue();
             dbgHandler("Got error", e);
             // TODO how to handle errors?
         });
@@ -999,12 +1069,18 @@ export class Handler implements Subscriber {
         }
         dbgHandler("%s sending value %o", this.id, msg);
         this.socket.emit('v', msg);
+        if (!extra || !extra.q) {
+            delete this.ongoingReads[path];
+            this.dequeue();
+        }
     }
 
     queryFetchEnd(queryId :string) {
         if (this.closed) return;
         dbgHandler("%s sending query end %s", this.id, queryId);
         this.socket.emit('qd', {q:queryId});
+        delete this.ongoingReads['$q' + queryId];
+        this.dequeue();
     }
 
     queryExit(path :string, queryId :string) {
