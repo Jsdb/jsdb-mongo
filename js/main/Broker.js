@@ -1,5 +1,5 @@
 /**
- * TSDB Mongo 20160905_170738_master_1.0.0_21874a2
+ * TSDB Mongo 20160906_015842_master_1.0.0_cb8bb71
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -24,7 +24,7 @@ var __extends = (this && this.__extends) || function (d, b) {
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
-    exports.VERSION = "20160905_170738_master_1.0.0_21874a2";
+    exports.VERSION = "20160906_015842_master_1.0.0_cb8bb71";
     var NopAuthService = (function () {
         function NopAuthService() {
         }
@@ -43,6 +43,8 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.startWait = [];
             this.handlers = {};
             this.subscriptions = {};
+            this.oplogMaxtime = null;
+            this.oplogStream = null;
             dbgBroker("Created broker %s", this.id);
             this.socket = $socket;
             if (collectionDb && collectionName) {
@@ -151,15 +153,26 @@ var __extends = (this && this.__extends) || function (d, b) {
                 return;
             if (this.closed)
                 return;
-            return this.oplog.find({}).project({ ts: 1 }).sort({ $natural: -1 }).limit(1).toArray().then(function (max) {
+            var findMaxProm = null;
+            if (!this.oplogMaxtime) {
+                findMaxProm = this.oplog.find({}).project({ ts: 1 }).sort({ $natural: -1 }).limit(1).toArray().then(function (max) {
+                    var maxtime = new Mongo.Timestamp(0, Math.floor(new Date().getTime() / 1000));
+                    if (max && max.length && max[0].ts)
+                        maxtime = max[0].ts;
+                    return maxtime;
+                });
+            }
+            else {
+                findMaxProm = Promise.resolve(this.oplogMaxtime);
+            }
+            return findMaxProm.then(function (maxtime) {
                 if (_this.closed)
                     return;
-                var maxtime = new Mongo.Timestamp(0, Math.floor(new Date().getTime() / 1000));
-                if (max && max.length && max[0].ts)
-                    maxtime = max[0].ts;
-                var oplogStream = _this.oplog
+                if (_this.oplogStream)
+                    _this.oplogStream.close();
+                var oplogStream = _this.oplogStream = _this.oplog
                     .find({ ts: { $gt: maxtime } })
-                    .project({ op: 1, o: 1, o2: 1 })
+                    .project({ op: 1, o: 1, o2: 1, ts: 1 })
                     .addCursorFlag('tailable', true)
                     .addCursorFlag('awaitData', true)
                     .addCursorFlag('oplogReplay', true)
@@ -168,6 +181,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 oplogStream.on('data', function (d) {
                     // Find and notify registered handlers
                     dbgOplog('%s : %o', _this.id, d);
+                    _this.oplogMaxtime = d.ts;
                     if (d.op == 'i') {
                         // It's an insert of new data
                         _this.broadcast(d.o._id, d.o);
@@ -203,15 +217,16 @@ var __extends = (this && this.__extends) || function (d, b) {
                     // Re-hook
                     if (_this.closed)
                         return;
-                    dbgBroker("Re-hooking on oplog after a close event");
-                    _this.hookOplog();
+                    if (_this.oplogStream === oplogStream) {
+                        dbgBroker("Re-hooking on oplog after a close event");
+                        _this.hookOplog();
+                    }
                 });
                 oplogStream.on('error', function (e) {
                     // Re-hook
                     dbgBroker("Re-hooking on oplog after error", e);
-                    _this.hookOplog();
+                    oplogStream.close();
                 });
-                _this.lastOplogStream = oplogStream;
             });
         };
         Broker.prototype.register = function (handler) {
@@ -297,8 +312,8 @@ var __extends = (this && this.__extends) || function (d, b) {
             // Sttings closed to true will stop re-hooking the oplog and handing incoming socket connections
             this.closed = true;
             var proms = [];
-            if (this.lastOplogStream) {
-                proms.push(this.lastOplogStream.close());
+            if (this.oplogStream) {
+                proms.push(this.oplogStream.close());
             }
             var handlerKeys = Object.getOwnPropertyNames(this.handlers);
             for (var i = 0; i < handlerKeys.length; i++) {
@@ -319,6 +334,8 @@ var __extends = (this && this.__extends) || function (d, b) {
                     }
                 };
             }
+            if (ops.length == 0)
+                return Promise.resolve(null);
             return this.collection.bulkWrite(ops);
         };
         Broker.prototype.merge = function (handler, path, val) {
@@ -773,6 +790,17 @@ var __extends = (this && this.__extends) || function (d, b) {
     }
     // Does not need to export, but there are no friendly/package/module accessible methods, and Broker.subscribe will complain is Handler is private
     var Handler = (function () {
+        // TODO a read-write lock that avoids sending to the client stale data.
+        /*
+         Approximate rules should be :
+            - When a read arrive
+                - If a write is in progress or in queue, store the read in a queue
+                - Start the read, count number of ongoing reads
+            - When a write arrive
+                - If reads or writes are in progress, store the write in a queue
+            - When there are no ongoing reads, dequeue one at a time the write operations
+            - Where there are no ongoing writes, start simultaneously all the read operations
+         */
         function Handler(socket, authData, broker) {
             var _this = this;
             this.socket = socket;
@@ -782,15 +810,19 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.closed = false;
             this.pathSubs = {};
             this.queries = {};
+            this.ongoingReads = {};
+            this.ongoingWrite = null;
+            this.writeQueue = [];
+            this.readQueue = [];
             this.id = socket.id.substr(2);
             dbgHandler("%s handler created", this.id);
-            socket.on('sp', function (path, fn) { return filterAck(fn, _this.subscribePath(path)); });
+            socket.on('sp', function (path, fn) { return _this.enqueueRead(function () { return filterAck(fn, _this.subscribePath(path)); }); });
             socket.on('up', function (path, fn) { return filterAck(fn, _this.unsubscribePath(path)); });
             socket.on('pi', function (id, fn) { return filterAck(fn, _this.ping(id)); });
-            socket.on('sq', function (def, fn) { return filterAck(fn, _this.subscribeQuery(def)); });
+            socket.on('sq', function (def, fn) { return _this.enqueueRead(function () { return filterAck(fn, _this.subscribeQuery(def)); }); });
             socket.on('uq', function (id, fn) { return filterAck(fn, _this.unsubscribeQuery(id)); });
-            socket.on('s', function (path, val, fn) { return _this.set(path, val, fn); });
-            socket.on('m', function (path, val, fn) { return _this.merge(path, val, fn); });
+            socket.on('s', function (path, val, fn) { return _this.enqueueWrite(function () { return _this.set(path, val, fn); }); });
+            socket.on('m', function (path, val, fn) { return _this.enqueueWrite(function () { return _this.merge(path, val, fn); }); });
             socket.on('disconnect', function () {
                 _this.close();
             });
@@ -798,6 +830,42 @@ var __extends = (this && this.__extends) || function (d, b) {
             socket.emit('aa');
             socket.on('aa', function () { socket.emit('aa'); });
         }
+        Handler.prototype.enqueueRead = function (fn) {
+            // If no write operation in the queue (waiting or executing) fire the read
+            if (this.writeQueue.length == 0)
+                return fn();
+            // Otherwise queue the read
+            this.readQueue.push(fn);
+            dbgHandler("%s enqueued read operation, now %s in queue", this.id, this.readQueue.length);
+        };
+        Handler.prototype.enqueueWrite = function (fn) {
+            // Anyway put the write in the queue
+            this.writeQueue.push(fn);
+            dbgHandler("%s enqueued write operation, now %s in queue", this.id, this.writeQueue.length);
+            this.dequeue();
+        };
+        Handler.prototype.dequeue = function () {
+            // If there is something in the write queue, fire it
+            if (this.writeQueue.length) {
+                // If there are no reads going on
+                for (var k in this.ongoingReads)
+                    return;
+                // If there is no write already going on 
+                if (this.ongoingWrite)
+                    return;
+                // Fire the write
+                dbgHandler("%s dequeuing write operation", this.id);
+                this.ongoingWrite = this.writeQueue.shift();
+                this.ongoingWrite();
+                return;
+            }
+            // Otherwise fire all reads
+            var readfn = null;
+            while ((readfn = this.readQueue.pop())) {
+                dbgHandler("%s dequeuing write operation", this.id);
+                readfn();
+            }
+        };
         Handler.prototype.updateAuthData = function (data) {
             this.authData = data;
         };
@@ -807,6 +875,8 @@ var __extends = (this && this.__extends) || function (d, b) {
                 return;
             this.closed = true;
             this.socket.removeAllListeners();
+            this.readQueue = null;
+            this.writeQueue = null;
             this.socket = null;
             for (var k in this.pathSubs) {
                 this.broker.unsubscribe(this, k);
@@ -827,6 +897,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             dbgHandler("%s subscribing to %s", this.id, path);
             this.pathSubs[path] = true;
             this.broker.subscribe(this, path);
+            this.ongoingReads[path] = true;
             this.broker.fetch(this, path);
             return 'k';
         };
@@ -837,6 +908,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             }
             dbgHandler("%s unsubscribing from %s", this.id, path);
             delete this.pathSubs[path];
+            delete this.ongoingReads[path];
             this.broker.unsubscribe(this, path);
             return 'k';
         };
@@ -846,6 +918,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 return 'k';
             }
             dbgHandler("%s subscribing query to %s", this.id, def.path);
+            this.ongoingReads['$q' + def.id] = true;
             var state = new SimpleQueryState(this, this.broker, def);
             this.queries[def.id] = state;
             state.start();
@@ -859,6 +932,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             }
             dbgHandler("%s unsubscribing from query %s", this.id, id);
             state.stop();
+            delete this.ongoingReads['$q' + id];
             delete this.queries[id];
             return 'k';
         };
@@ -867,17 +941,35 @@ var __extends = (this && this.__extends) || function (d, b) {
             return id;
         };
         Handler.prototype.set = function (path, val, cb) {
+            var _this = this;
             dbgHandler("%s writing in %s %o", this.id, path, val);
             // TODO security here
-            this.broker.set(this, path, val).then(function () { return filterAck(cb, 'k'); }).catch(function (e) {
+            this.broker.set(this, path, val)
+                .then(function () {
+                _this.ongoingWrite = null;
+                _this.dequeue();
+                filterAck(cb, 'k');
+            })
+                .catch(function (e) {
+                _this.ongoingWrite = null;
+                _this.dequeue();
                 dbgHandler("Got error", e);
                 // TODO how to handle errors?
             });
         };
         Handler.prototype.merge = function (path, val, cb) {
+            var _this = this;
             dbgHandler("%s merging in %s %o", this.id, path, val);
             // TODO security here
-            this.broker.merge(this, path, val).then(function () { return filterAck(cb, 'k'); }).catch(function (e) {
+            this.broker.merge(this, path, val)
+                .then(function () {
+                _this.ongoingWrite = null;
+                _this.dequeue();
+                filterAck(cb, 'k');
+            })
+                .catch(function (e) {
+                _this.ongoingWrite = null;
+                _this.dequeue();
                 dbgHandler("Got error", e);
                 // TODO how to handle errors?
             });
@@ -893,12 +985,18 @@ var __extends = (this && this.__extends) || function (d, b) {
             }
             dbgHandler("%s sending value %o", this.id, msg);
             this.socket.emit('v', msg);
+            if (!extra || !extra.q) {
+                delete this.ongoingReads[path];
+                this.dequeue();
+            }
         };
         Handler.prototype.queryFetchEnd = function (queryId) {
             if (this.closed)
                 return;
             dbgHandler("%s sending query end %s", this.id, queryId);
             this.socket.emit('qd', { q: queryId });
+            delete this.ongoingReads['$q' + queryId];
+            this.dequeue();
         };
         Handler.prototype.queryExit = function (path, queryId) {
             if (this.closed)

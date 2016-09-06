@@ -24,7 +24,8 @@ export declare class Broker {
     private startWait;
     private handlers;
     private subscriptions;
-    private lastOplogStream;
+    private oplogMaxtime;
+    private oplogStream;
     constructor($socket?: SocketIO.Server, collectionDb?: string, collectionName?: string, oplogDb?: string, collectionOptions?: any);
     setSocketServer(value: SocketIO.Server): this;
     setCollection(value: Mongo.Collection): this;
@@ -110,7 +111,14 @@ export declare class Handler implements Subscriber {
     closed: boolean;
     private pathSubs;
     private queries;
+    private ongoingReads;
+    private ongoingWrite;
+    private writeQueue;
+    private readQueue;
     constructor(socket: Socket, authData: Object, broker: Broker);
+    private enqueueRead(fn);
+    private enqueueWrite(fn);
+    private dequeue();
     updateAuthData(data: any): void;
     close(): void;
     subscribePath(path: string): string;
