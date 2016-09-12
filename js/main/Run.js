@@ -48,10 +48,14 @@ jsdbmongo \
     }
     function makeUrl(user, pass) {
         var url = 'mongodb://';
-        url += (user || args['u']);
-        url += ':';
-        url += (pass || args['p']);
-        url += '@';
+        if (user || args['u']) {
+            url += (user || args['u']);
+            if (pass || args['p']) {
+                url += ':';
+                url += (pass || args['p']);
+            }
+            url += '@';
+        }
         if (typeof (args['h']) == 'array') {
             for (var i = 0; i < args['h'].length; i++) {
                 url += args['h'][i] + ',';
@@ -65,10 +69,10 @@ jsdbmongo \
         return url;
     }
     if (!args['curl']) {
-        args['curl'] = makeUrl() + args['d'] + "?replicaSet=" + args['r'];
+        args['curl'] = makeUrl() + args['d'] + (args['r'] ? "?replicaSet=" + args['r'] : '');
     }
     if (!args['ourl']) {
-        args['ourl'] = makeUrl(args['ou'], args['op']) + "local?replicaSet=" + args['r'] + "&authSource=admin";
+        args['ourl'] = makeUrl(args['ou'], args['op']) + "local?" + (args['r'] ? "replicaSet=" + args['r'] : '') + "&authSource=admin";
     }
     var io = SocketIO();
     io.on('connection', function (socket) { });

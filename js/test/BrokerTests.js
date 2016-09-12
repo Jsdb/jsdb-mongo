@@ -230,7 +230,7 @@ describe("Broker >", function () {
                 return mongoColl.deleteMany({}).then(function () {
                     return getConnectedClient();
                 }).then(function (cc) {
-                    return sendCommand(cc, 's', '/test/data', 'ciao');
+                    return sendCommand(cc, 's', '/test/data', 'ciao', 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert("returned correct ack", ack, 'k');
                     return mongoColl.find({}).toArray();
@@ -244,7 +244,7 @@ describe("Broker >", function () {
                 return mongoColl.deleteMany({}).then(function () {
                     return getConnectedClient();
                 }).then(function (cc) {
-                    return sendCommand(cc, 's', '/test/data', 100);
+                    return sendCommand(cc, 's', '/test/data', 100, 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert("returned correct ack", ack, 'k');
                     return mongoColl.find({}).toArray();
@@ -258,7 +258,7 @@ describe("Broker >", function () {
                 return mongoColl.deleteMany({}).then(function () {
                     return getConnectedClient();
                 }).then(function (cc) {
-                    return sendCommand(cc, 's', '/testData', { a: 1 });
+                    return sendCommand(cc, 's', '/testData', { a: 1 }, 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert("returned correct ack", ack, 'k');
                     return mongoColl.find({}).toArray();
@@ -272,7 +272,7 @@ describe("Broker >", function () {
                 return mongoColl.deleteMany({}).then(function () {
                     return getConnectedClient();
                 }).then(function (cc) {
-                    return sendCommand(cc, 's', '/test', 'ciao');
+                    return sendCommand(cc, 's', '/test', 'ciao', 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert("returned correct ack", ack, 'k');
                     return mongoColl.find({}).toArray();
@@ -286,7 +286,7 @@ describe("Broker >", function () {
                 return mongoColl.deleteMany({}).then(function () {
                     return getConnectedClient();
                 }).then(function (cc) {
-                    return sendCommand(cc, 's', '/user/1', { name: 'simone', surname: 'gianni', addresses: [{ label: 'home', line: 'via tiburtina' }, { label: 'office', line: 'viale carso' }] });
+                    return sendCommand(cc, 's', '/user/1', { name: 'simone', surname: 'gianni', addresses: [{ label: 'home', line: 'via tiburtina' }, { label: 'office', line: 'viale carso' }] }, 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert("returned correct ack", ack, 'k');
                     return mongoColl.find({}).toArray();
@@ -303,7 +303,7 @@ describe("Broker >", function () {
                     return getConnectedClient();
                 }).then(function (ncc) {
                     cc = ncc;
-                    return sendCommand(cc, 's', '/test', { data1: 'ciao', data2: 'come', data3: 'va' });
+                    return sendCommand(cc, 's', '/test', { data1: 'ciao', data2: 'come', data3: 'va' }, 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert("returned correct ack", ack, 'k');
                     return mongoColl.find({}).toArray();
@@ -311,7 +311,7 @@ describe("Broker >", function () {
                     tsmatchers_1.assert("should exist only one data", data, tsmatchers_1.is.array.withLength(1));
                     var rec = data[0];
                     tsmatchers_1.assert("record is right", rec, tsmatchers_1.is.strictly.object.matching({ _id: '/test', data1: 'ciao', data2: 'come', data3: 'va' }));
-                    return sendCommand(cc, 's', '/test/data2', 'quanto');
+                    return sendCommand(cc, 's', '/test/data2', 'quanto', 3);
                 }).then(function (ack) {
                     tsmatchers_1.assert("returned correct ack", ack, 'k');
                     return mongoColl.find({}).toArray();
@@ -342,7 +342,7 @@ describe("Broker >", function () {
                                 { name: 'office', line: 'via luca signorelli' }
                             ]
                         }
-                    ]);
+                    ], 1);
                 });
             });
             it('Should correctly unroll deletes for simple objects', function () {
@@ -359,7 +359,7 @@ describe("Broker >", function () {
             });
             it('Should update simple object values', function () {
                 return getConnectedClient().then(function (cc) {
-                    return sendCommand(cc, 'm', '/users/0', { phone: 'iphone', addresses: null, surname: null });
+                    return sendCommand(cc, 'm', '/users/0', { phone: 'iphone', addresses: null, surname: null }, 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert("returned correct ack", ack, 'k');
                     return mongoColl.find({}).toArray();
@@ -380,13 +380,13 @@ describe("Broker >", function () {
                 return getConnectedClient();
             }).then(function (ncc) {
                 cc = ncc;
-                return sendCommand(cc, 's', '/user/1', { name: 'simone', surname: 'gianni', addresses: [{ label: 'home', line: 'via tiburtina' }, { label: 'office', line: 'viale carso' }] });
+                return sendCommand(cc, 's', '/user/1', { name: 'simone', surname: 'gianni', addresses: [{ label: 'home', line: 'via tiburtina' }, { label: 'office', line: 'viale carso' }] }, 2);
             }).then(function (ack) {
                 tsmatchers_1.assert("returned correct ack", ack, 'k');
                 return mongoColl.find({}).toArray();
             }).then(function (data) {
                 tsmatchers_1.assert("should exist all the data", data, tsmatchers_1.is.array.withLength(3));
-                return sendCommand(cc, 's', '/user/1', null);
+                return sendCommand(cc, 's', '/user/1', null, 3);
             }).then(function (ack) {
                 tsmatchers_1.assert("returned correct ack", ack, 'k');
                 return mongoColl.find({}).toArray();
@@ -400,13 +400,13 @@ describe("Broker >", function () {
                 return getConnectedClient();
             }).then(function (ncc) {
                 cc = ncc;
-                return sendCommand(cc, 's', '/user/1', { name: 'simone', surname: 'gianni', addresses: [{ label: 'home', line: 'via tiburtina' }, { label: 'office', line: 'viale carso' }] });
+                return sendCommand(cc, 's', '/user/1', { name: 'simone', surname: 'gianni', addresses: [{ label: 'home', line: 'via tiburtina' }, { label: 'office', line: 'viale carso' }] }, 2);
             }).then(function (ack) {
                 tsmatchers_1.assert("returned correct ack", ack, 'k');
                 return mongoColl.find({}).toArray();
             }).then(function (data) {
                 tsmatchers_1.assert("should exist all the data", data, tsmatchers_1.is.array.withLength(3));
-                return sendCommand(cc, 's', '/user/1/addresses/1', null);
+                return sendCommand(cc, 's', '/user/1/addresses/1', null, 3);
             }).then(function (ack) {
                 tsmatchers_1.assert("returned correct ack", ack, 'k');
                 return mongoColl.find({}).toArray();
@@ -420,7 +420,7 @@ describe("Broker >", function () {
                 return getConnectedClient();
             }).then(function (ncc) {
                 cc = ncc;
-                return sendCommand(cc, 's', '/user/1', { name: 'simone', surname: 'gianni' });
+                return sendCommand(cc, 's', '/user/1', { name: 'simone', surname: 'gianni' }, 2);
             }).then(function (ack) {
                 tsmatchers_1.assert("returned correct ack", ack, 'k');
                 return mongoColl.find({}).toArray();
@@ -428,7 +428,7 @@ describe("Broker >", function () {
                 tsmatchers_1.assert("should exist all the data", data, tsmatchers_1.is.array.withLength(1));
                 var rec = data[0];
                 tsmatchers_1.assert("object should match", rec, tsmatchers_1.is.strictly.object.matching({ _id: tsmatchers_1.is.string, name: 'simone', surname: 'gianni' }));
-                return sendCommand(cc, 's', '/user/1/name', null);
+                return sendCommand(cc, 's', '/user/1/name', null, 3);
             }).then(function (ack) {
                 tsmatchers_1.assert("returned correct ack", ack, 'k');
                 return mongoColl.find({}).toArray();
@@ -461,7 +461,7 @@ describe("Broker >", function () {
                     },
                     { name: 'simone', surname: 'altro' },
                     { name: 'simone', surname: 'ultro' },
-                ]);
+                ], 1);
             });
         });
         it('Should correctly recompose objects', function () {
@@ -488,7 +488,7 @@ describe("Broker >", function () {
             it('Should fetch a simple object', function (done) {
                 return getConnectedClient().then(function (cc) {
                     cc.connection.on('v', function (pl) {
-                        tsmatchers_1.assert("right payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2', v: { name: 'simone', surname: 'altro' } }));
+                        tsmatchers_1.assert("right payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2', v: { name: 'simone', surname: 'altro' }, n: 1 }));
                         done();
                     });
                     return sendCommand(cc, 'sp', '/users/2');
@@ -507,7 +507,8 @@ describe("Broker >", function () {
                                     { name: 'home', line: 'via tiburtina' },
                                     { name: 'office', line: 'viale carso' }
                                 ]
-                            }
+                            },
+                            n: 1
                         }));
                         done();
                     });
@@ -519,7 +520,7 @@ describe("Broker >", function () {
             it('should fetch a specific value', function (done) {
                 return getConnectedClient().then(function (cc) {
                     cc.connection.on('v', function (pl) {
-                        tsmatchers_1.assert("right payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simone' }));
+                        tsmatchers_1.assert("right payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simone', n: 1 }));
                         done();
                     });
                     return sendCommand(cc, 'sp', '/users/2/name');
@@ -537,7 +538,8 @@ describe("Broker >", function () {
                             match: tsmatchers_1.is.object.matching({
                                 v: {
                                     users: tsmatchers_1.is.defined
-                                }
+                                },
+                                n: 1
                             })
                         }
                     ]);
@@ -558,10 +560,10 @@ describe("Broker >", function () {
                     cc = ncc;
                     cc.connection.on('v', function (pl) {
                         if (evtCount == 0) {
-                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2', v: { name: 'simone', surname: 'altro' } }));
+                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2', v: { name: 'simone', surname: 'altro' }, n: 1 }));
                         }
                         else if (evtCount == 1) {
-                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2', v: { name: 'simona', surname: 'altrini' } }));
+                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2', v: { name: 'simona', surname: 'altrini' }, n: 2 }));
                             done();
                         }
                         evtCount++;
@@ -569,7 +571,7 @@ describe("Broker >", function () {
                     return sendCommand(cc, 'sp', '/users/2');
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
-                    return sendCommand(cc, 's', '/users/2', { name: 'simona', surname: 'altrini' });
+                    return sendCommand(cc, 's', '/users/2', { name: 'simona', surname: 'altrini' }, 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
                 });
@@ -585,16 +587,16 @@ describe("Broker >", function () {
                     return sendCommand(cc, 'sp', '/users/2');
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
-                    return sendCommand(cc, 'm', '/users/2', { name: 'simona', surname: null, phone: 'iphone' });
+                    return sendCommand(cc, 'm', '/users/2', { name: 'simona', surname: null, phone: 'iphone' }, 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
                     return wait(100);
                 }).then(function () {
                     tsmatchers_1.assert("right number of events", evts, tsmatchers_1.is.array.withLength(4));
-                    tsmatchers_1.assert("has event for name:simona", evts, tsmatchers_1.is.array.containing(tsmatchers_1.is.object.matching({ "p": "/users/2", "v": { "name": "simone", "surname": "altro" } })));
-                    tsmatchers_1.assert("has event for name:simona", evts, tsmatchers_1.is.array.containing(tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simona' })));
-                    tsmatchers_1.assert("has event for surname:null", evts, tsmatchers_1.is.array.containing(tsmatchers_1.is.object.matching({ p: '/users/2/surname', v: null })));
-                    tsmatchers_1.assert("has event for phone:iphone", evts, tsmatchers_1.is.array.containing(tsmatchers_1.is.object.matching({ p: '/users/2/phone', v: 'iphone' })));
+                    tsmatchers_1.assert("has event for name:simona", evts, tsmatchers_1.is.array.containing(tsmatchers_1.is.object.matching({ "p": "/users/2", "v": { "name": "simone", "surname": "altro" }, n: 1 })));
+                    tsmatchers_1.assert("has event for name:simona", evts, tsmatchers_1.is.array.containing(tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simona', n: 2 })));
+                    tsmatchers_1.assert("has event for surname:null", evts, tsmatchers_1.is.array.containing(tsmatchers_1.is.object.matching({ p: '/users/2/surname', v: null, n: 2 })));
+                    tsmatchers_1.assert("has event for phone:iphone", evts, tsmatchers_1.is.array.containing(tsmatchers_1.is.object.matching({ p: '/users/2/phone', v: 'iphone', n: 2 })));
                 });
             });
             it('Should notify of changes on specific value', function () {
@@ -607,10 +609,10 @@ describe("Broker >", function () {
                         console.log('in on(v) ' + evtCount);
                         pkprom.resolve();
                         if (evtCount == 0) {
-                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simone' }));
+                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simone', n: 1 }));
                         }
                         else if (evtCount == 1) {
-                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'sara' }));
+                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'sara', n: 2 }));
                         }
                         evtCount++;
                     });
@@ -621,7 +623,7 @@ describe("Broker >", function () {
                     return pkprom;
                 }).then(function () {
                     pkprom = extPromise();
-                    return sendCommand(cc, 's', '/users/2/name', 'sara');
+                    return sendCommand(cc, 's', '/users/2/name', 'sara', 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
                     return pkprom;
@@ -634,10 +636,10 @@ describe("Broker >", function () {
                     cc = ncc;
                     cc.connection.on('v', function (pl) {
                         if (evtCount == 0) {
-                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ v: { 0: tsmatchers_1.is.object, 1: tsmatchers_1.is.object, 2: tsmatchers_1.is.object, 3: tsmatchers_1.is.object } }));
+                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ v: { 0: tsmatchers_1.is.object, 1: tsmatchers_1.is.object, 2: tsmatchers_1.is.object, 3: tsmatchers_1.is.object }, n: 1 }));
                         }
                         else if (evtCount == 1) {
-                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2', v: { name: 'simona', surname: 'altrini' } }));
+                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2', v: { name: 'simona', surname: 'altrini' }, n: 2 }));
                             done();
                         }
                         evtCount++;
@@ -645,7 +647,7 @@ describe("Broker >", function () {
                     return sendCommand(cc, 'sp', '/users');
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
-                    return sendCommand(cc, 's', '/users/2', { name: 'simona', surname: 'altrini' });
+                    return sendCommand(cc, 's', '/users/2', { name: 'simona', surname: 'altrini' }, 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
                 });
@@ -657,10 +659,10 @@ describe("Broker >", function () {
                     cc = ncc;
                     cc.connection.on('v', function (pl) {
                         if (evtCount == 0) {
-                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ v: { 0: tsmatchers_1.is.object, 1: tsmatchers_1.is.object, 2: tsmatchers_1.is.object, 3: tsmatchers_1.is.object } }));
+                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ v: { 0: tsmatchers_1.is.object, 1: tsmatchers_1.is.object, 2: tsmatchers_1.is.object, 3: tsmatchers_1.is.object }, n: 1 }));
                         }
                         else if (evtCount == 1) {
-                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2', v: null }));
+                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2', v: null, n: 2 }));
                             done();
                         }
                         evtCount++;
@@ -668,7 +670,7 @@ describe("Broker >", function () {
                     return sendCommand(cc, 'sp', '/users');
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
-                    return sendCommand(cc, 's', '/users/2', null);
+                    return sendCommand(cc, 's', '/users/2', null, 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
                 });
@@ -680,10 +682,10 @@ describe("Broker >", function () {
                     cc = ncc;
                     cc.connection.on('v', function (pl) {
                         if (evtCount == 0) {
-                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simone' }));
+                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simone', n: 1 }));
                         }
                         else if (evtCount == 1) {
-                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simona' }));
+                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simona', n: 2 }));
                             done();
                         }
                         evtCount++;
@@ -691,7 +693,7 @@ describe("Broker >", function () {
                     return sendCommand(cc, 'sp', '/users/2/name');
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
-                    return sendCommand(cc, 's', '/users/2', { name: 'simona', surname: 'altrini' });
+                    return sendCommand(cc, 's', '/users/2', { name: 'simona', surname: 'altrini' }, 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
                 });
@@ -705,10 +707,10 @@ describe("Broker >", function () {
                     cc.connection.on('v', function (pl) {
                         pkprom.resolve();
                         if (evtCount == 0) {
-                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simone' }));
+                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simone', n: 1 }));
                         }
                         else if (evtCount == 1) {
-                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: null }));
+                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: null, n: 2 }));
                         }
                         evtCount++;
                     });
@@ -719,7 +721,7 @@ describe("Broker >", function () {
                     return pkprom;
                 }).then(function () {
                     pkprom = extPromise();
-                    return sendCommand(cc, 's', '/users/2', null);
+                    return sendCommand(cc, 's', '/users/2', null, 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
                     return pkprom;
@@ -734,10 +736,10 @@ describe("Broker >", function () {
                     cc.connection.on('v', function (pl) {
                         pkprom.resolve();
                         if (evtCount == 0) {
-                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simone' }));
+                            tsmatchers_1.assert("right fetch payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: 'simone', n: 1 }));
                         }
                         else if (evtCount == 1) {
-                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: null }));
+                            tsmatchers_1.assert("right update payload", pl, tsmatchers_1.is.object.matching({ p: '/users/2/name', v: null, n: 2 }));
                         }
                         evtCount++;
                     });
@@ -747,7 +749,7 @@ describe("Broker >", function () {
                     return pkprom;
                 }).then(function () {
                     pkprom = extPromise();
-                    return sendCommand(cc, 's', '/users/2/name', null);
+                    return sendCommand(cc, 's', '/users/2/name', null, 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
                     return pkprom;
@@ -769,7 +771,7 @@ describe("Broker >", function () {
                         sendCommand(cc, 'sp', '/users/2/addresses/0/name')
                     ]);
                 }).then(function (ack) {
-                    return sendCommand(cc, 's', '/users/2/addresses', { 0: { name: 'office', line: 'viale carso' } });
+                    return sendCommand(cc, 's', '/users/2/addresses', { 0: { name: 'office', line: 'viale carso' } }, 2);
                 }).then(function (ack) {
                     tsmatchers_1.assert('acked correctly', ack, 'k');
                     return wait(200);
@@ -791,7 +793,7 @@ describe("Broker >", function () {
                     for (var i = 0; i < 10; i++) {
                         vals[i] = { str: 'a' + i, num: i, invstr: 'a' + (99 - i), invnum: 99 - i, nest: { num: i } };
                     }
-                    return sendCommand(cc, 's', '/vals', vals);
+                    return sendCommand(cc, 's', '/vals', vals, 2);
                 });
             });
             it('Should find plain elements with query', function () {
@@ -809,16 +811,17 @@ describe("Broker >", function () {
                                     }
                                 },
                                 q: 'q1',
+                                n: 1,
                                 aft: null
                             })
                         },
                         {
                             event: 'v',
-                            match: tsmatchers_1.is.object.matching({ p: '/users/2', v: tsmatchers_1.is.defined, q: 'q1', aft: '/users/0' })
+                            match: tsmatchers_1.is.object.matching({ p: '/users/2', v: tsmatchers_1.is.defined, q: 'q1', n: 1, aft: '/users/0' })
                         },
                         {
                             event: 'v',
-                            match: tsmatchers_1.is.object.matching({ p: '/users/3', v: tsmatchers_1.is.defined, q: 'q1', aft: '/users/2' })
+                            match: tsmatchers_1.is.object.matching({ p: '/users/3', v: tsmatchers_1.is.defined, q: 'q1', n: 1, aft: '/users/2' })
                         },
                         {
                             event: 'qd',
@@ -838,7 +841,7 @@ describe("Broker >", function () {
                         var aft = null;
                         if (i > 0)
                             aft = '/vals/' + (i - 1);
-                        expect.push({ event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/' + i, aft: aft, q: 'q1' }) });
+                        expect.push({ event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/' + i, aft: aft, n: 1, q: 'q1' }) });
                     }
                     expect.push({ event: 'qd', match: tsmatchers_1.is.defined });
                     cc.eventCheck = checkEvents(cc.connection, expect);
@@ -870,7 +873,7 @@ describe("Broker >", function () {
                         var aft = null;
                         if (i < 9)
                             aft = '/vals/' + (i + 1);
-                        expect.push({ event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/' + i, aft: aft }) });
+                        expect.push({ event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/' + i, n: 1, aft: aft }) });
                     }
                     expect.push({ event: 'qd', match: tsmatchers_1.is.defined });
                     cc.eventCheck = checkEvents(cc.connection, expect);
@@ -889,7 +892,7 @@ describe("Broker >", function () {
                         var aft = null;
                         if (i < 9)
                             aft = '/vals/' + (i + 1);
-                        expect.push({ event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/' + i, aft: aft }) });
+                        expect.push({ event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/' + i, n: 1, aft: aft }) });
                     }
                     expect.push({ event: 'qd', match: tsmatchers_1.is.defined });
                     cc.eventCheck = checkEvents(cc.connection, expect);
@@ -908,7 +911,7 @@ describe("Broker >", function () {
                         var aft = null;
                         if (i > 0)
                             aft = '/vals/' + (i - 1);
-                        expect.push({ event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/' + i, aft: aft, q: 'q1' }) });
+                        expect.push({ event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/' + i, aft: aft, n: 1, q: 'q1' }) });
                     }
                     expect.push({ event: 'qd', match: tsmatchers_1.is.defined });
                     cc.eventCheck = checkEvents(cc.connection, expect);
@@ -930,7 +933,7 @@ describe("Broker >", function () {
                         var aft = null;
                         if (i > 0)
                             aft = '/vals/' + (i - 1);
-                        expect.push({ event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/' + i, aft: aft, q: 'q1' }) });
+                        expect.push({ event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/' + i, aft: aft, n: 1, q: 'q1' }) });
                     }
                     expect.push({ event: 'qd', match: tsmatchers_1.is.defined });
                     cc.eventCheck = checkEvents(cc.connection, expect);
@@ -941,9 +944,9 @@ describe("Broker >", function () {
                 }).then(function (evts) {
                     cc.eventCheck.stop();
                     cc.eventCheck = checkEvents(cc.connection, [
-                        { event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/3/name', v: 'simone' }) }
+                        { event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/3/name', v: 'simone', n: 2 }) }
                     ]);
-                    return sendCommand(cc, 's', '/vals/3/name', 'simone');
+                    return sendCommand(cc, 's', '/vals/3/name', 'simone', 2);
                 }).then(function () {
                     return cc.eventCheck;
                 }).then(function (evts) {
@@ -951,7 +954,7 @@ describe("Broker >", function () {
                     cc.connection.on('v', function () {
                         extraMessage = true;
                     });
-                    return sendCommand(cc, 's', '/vals/6/name', 'simone');
+                    return sendCommand(cc, 's', '/vals/6/name', 'simone', 3);
                 }).then(function () {
                     return wait(100);
                 }).then(function () {
@@ -971,6 +974,7 @@ describe("Broker >", function () {
                                     name: 'sara',
                                 },
                                 q: 'q1',
+                                n: 1,
                                 aft: null
                             })
                         }
@@ -982,17 +986,17 @@ describe("Broker >", function () {
                 }).then(function (evts) {
                     cc.eventCheck.stop();
                     cc.eventCheck = checkEvents(cc.connection, [
-                        { event: 'v', match: tsmatchers_1.is.object.matching({ p: '/users/2', v: { name: 'sara' }, q: 'q1' }) }
+                        { event: 'v', match: tsmatchers_1.is.object.matching({ p: '/users/2', v: { name: 'sara' }, q: 'q1', n: 2 }) }
                     ]);
-                    return sendCommand(cc, 's', '/users/2', { name: 'sara' });
+                    return sendCommand(cc, 's', '/users/2', { name: 'sara' }, 2);
                 }).then(function () {
                     return cc.eventCheck;
                 }).then(function (evts) {
                     cc.eventCheck.stop();
                     cc.eventCheck = checkEvents(cc.connection, [
-                        { event: 'qx', match: tsmatchers_1.is.object.matching({ p: '/users/2', q: 'q1' }) }
+                        { event: 'qx', match: tsmatchers_1.is.object.matching({ p: '/users/2', q: 'q1', n: 3 }) }
                     ]);
-                    return sendCommand(cc, 's', '/users/2', { name: 'simone' });
+                    return sendCommand(cc, 's', '/users/2', { name: 'simone' }, 3);
                 }).then(function () {
                     return cc.eventCheck;
                 });
@@ -1010,6 +1014,7 @@ describe("Broker >", function () {
                                     name: 'sara',
                                 },
                                 q: 'q1',
+                                n: 1,
                                 aft: null
                             })
                         }
@@ -1021,17 +1026,17 @@ describe("Broker >", function () {
                 }).then(function (evts) {
                     cc.eventCheck.stop();
                     cc.eventCheck = checkEvents(cc.connection, [
-                        { event: 'v', match: tsmatchers_1.is.object.matching({ p: '/users/2', v: { name: 'sara' }, q: 'q1' }) }
+                        { event: 'v', match: tsmatchers_1.is.object.matching({ p: '/users/2', v: { name: 'sara' }, q: 'q1', n: 2 }) }
                     ]);
-                    return sendCommand(cc, 's', '/users/2/name', 'sara');
+                    return sendCommand(cc, 's', '/users/2/name', 'sara', 2);
                 }).then(function () {
                     return cc.eventCheck;
                 }).then(function (evts) {
                     cc.eventCheck.stop();
                     cc.eventCheck = checkEvents(cc.connection, [
-                        { event: 'qx', match: tsmatchers_1.is.object.matching({ p: '/users/2', q: 'q1' }) }
+                        { event: 'qx', match: tsmatchers_1.is.object.matching({ p: '/users/2', q: 'q1', n: 3 }) }
                     ]);
-                    return sendCommand(cc, 's', '/users/2/name', 'simone');
+                    return sendCommand(cc, 's', '/users/2/name', 'simone', 3);
                 }).then(function () {
                     return cc.eventCheck;
                 });

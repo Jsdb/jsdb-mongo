@@ -68,7 +68,8 @@ export interface SimpleQueryDef {
 export interface Subscriber {
     id: string;
     closed: boolean;
-    sendValue(path: string, val: any, extra?: any): void;
+    writeProg?: number;
+    sendValue(path: string, val: any, prog: number, extra?: any): void;
 }
 export interface SimpleQueryEntry {
     path: string;
@@ -101,7 +102,7 @@ export declare class SimpleQueryState implements Subscriber {
     foundEnd(): void;
     checkEnd(): void;
     checkExit(path: string): void;
-    sendValue(path: string, val: any, extra?: any): void;
+    sendValue(path: string, val: any, prog: number, extra?: any): void;
 }
 export declare class Handler implements Subscriber {
     private socket;
@@ -115,6 +116,7 @@ export declare class Handler implements Subscriber {
     private ongoingWrite;
     private writeQueue;
     private readQueue;
+    writeProg: number;
     constructor(socket: Socket, authData: Object, broker: Broker);
     private enqueueRead(fn);
     private enqueueWrite(fn);
@@ -125,10 +127,10 @@ export declare class Handler implements Subscriber {
     unsubscribePath(path: string): string;
     subscribeQuery(def: SimpleQueryDef): string;
     unsubscribeQuery(id: string): string;
-    ping(id: string): string;
-    set(path: string, val: any, cb: Function): void;
-    merge(path: string, val: any, cb: Function): void;
-    sendValue(path: string, val: any, extra?: any): void;
+    ping(writeProg: number): number;
+    set(path: string, val: any, prog: number, cb: Function): void;
+    merge(path: string, val: any, prog: number, cb: Function): void;
+    sendValue(path: string, val: any, prog: number, extra?: any): void;
     queryFetchEnd(queryId: string): void;
     queryExit(path: string, queryId: string): void;
 }

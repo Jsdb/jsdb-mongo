@@ -7,3 +7,4 @@ export declare function parentPath(path: string): string;
  */
 export declare function limitToChild(acpath: string, parentpath: string): string;
 export declare function pathRegexp(path: string, subpath?: string): RegExp;
+export declare function isEmpty(obj: any): boolean;

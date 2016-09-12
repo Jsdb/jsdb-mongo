@@ -67,6 +67,13 @@
         }
     }
     exports.pathRegexp = pathRegexp;
+    function isEmpty(obj) {
+        for (var k in obj) {
+            return true;
+        }
+        return false;
+    }
+    exports.isEmpty = isEmpty;
 });
 
 //# sourceMappingURL=Utils.js.map

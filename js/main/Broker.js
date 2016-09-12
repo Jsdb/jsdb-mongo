@@ -1,5 +1,5 @@
 /**
- * TSDB Mongo 20160906_015842_master_1.0.0_cb8bb71
+ * TSDB Mongo 20160912_185749_master_1.0.0_b07a8ce
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -24,7 +24,7 @@ var __extends = (this && this.__extends) || function (d, b) {
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
-    exports.VERSION = "20160906_015842_master_1.0.0_cb8bb71";
+    exports.VERSION = "20160912_185749_master_1.0.0_b07a8ce";
     var NopAuthService = (function () {
         function NopAuthService() {
         }
@@ -78,9 +78,13 @@ var __extends = (this && this.__extends) || function (d, b) {
             var _this = this;
             if (this.started)
                 throw new Error("Cannot change the collection on an already started broker");
+            dbgBroker("Connecting to collection on url %s collection %s options %o", collectionDb, collectionName, collectionOptions);
             this.startWait.push(Mongo.MongoClient.connect(collectionDb, collectionOptions).then(function (db) {
+                dbgBroker("Connected to db, opening %s collection", collectionName);
                 _this.collectionDb = db;
                 _this.collection = _this.collectionDb.collection(collectionName);
+            }).then(function () {
+                dbgBroker("Connected to collection");
             }).catch(function (err) {
                 console.warn("Error opening collection connection", err);
                 return Promise.reject(err);
@@ -91,9 +95,13 @@ var __extends = (this && this.__extends) || function (d, b) {
             var _this = this;
             if (this.started)
                 throw new Error("Cannot change the oplog on an already started broker");
+            dbgBroker("Connecting oplog %s", oplogDb);
             this.startWait.push(Mongo.MongoClient.connect(oplogDb).then(function (db) {
+                dbgBroker("Connected to db, opening oplog.rs collection");
                 _this.oplogDb = db;
                 _this.oplog = _this.oplogDb.collection('oplog.rs');
+            }).then(function () {
+                dbgBroker("Connected to oplog");
             }).catch(function (err) {
                 console.warn("Error opening oplog connection", err);
                 return Promise.reject(err);
@@ -268,7 +276,8 @@ var __extends = (this && this.__extends) || function (d, b) {
                     }
                 }
             }
-            if (typeof (val) == 'object' || typeof (val) == 'function') {
+            else if (typeof (val) == 'object' || typeof (val) == 'function') {
+                delete val._id;
                 for (var k in val) {
                     this.broadcastDown(path + '/' + k, val[k], alreadySent);
                 }
@@ -278,6 +287,8 @@ var __extends = (this && this.__extends) || function (d, b) {
         Broker.prototype.broadcastUp = function (path, val, fullpath, alreadySent) {
             if (!path)
                 return;
+            if (val && val._id)
+                delete val._id;
             this.broadcastToHandlers(path, val, alreadySent, fullpath);
             if (path.length == 0)
                 return;
@@ -298,7 +309,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                     delete ps[k];
                     continue;
                 }
-                handler.sendValue(tspath, val);
+                handler.sendValue(tspath, val, handler.writeProg);
             }
         };
         Broker.prototype.close = function () {
@@ -441,6 +452,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             var _this = this;
             dbgBroker('Fetching %s for %s', path, handler.id);
             path = Utils.normalizePath(path);
+            var preprog = handler.writeProg || null;
             return this.collection
                 .find({ _id: Utils.pathRegexp(path) }).sort({ _id: 1 })
                 .toArray()
@@ -460,18 +472,18 @@ var __extends = (this && this.__extends) || function (d, b) {
                     for (var i = 0; i < data.length; i++) {
                         recomposer.add(data[i]);
                     }
-                    handler.sendValue(path, recomposer.get(), extra);
+                    handler.sendValue(path, recomposer.get(), preprog, extra);
                     return;
                 }
                 _this.collection.findOne({ _id: Utils.parentPath(path) }).then(function (val) {
                     if (val == null) {
                         dbgBroker("Found no value on path %s using parent", path);
-                        handler.sendValue(path, null, extra);
+                        handler.sendValue(path, null, preprog, extra);
                     }
                     else {
                         var leaf = Utils.leafPath(path);
                         dbgBroker("Found %s on path %s using parent", val[leaf], path);
-                        handler.sendValue(path, val[leaf], extra);
+                        handler.sendValue(path, val[leaf], preprog, extra);
                     }
                 });
             })
@@ -537,8 +549,15 @@ var __extends = (this && this.__extends) || function (d, b) {
             enumerable: true,
             configurable: true
         });
-        ForwardingSubscriber.prototype.sendValue = function (path, val, extra) {
-            this.to.sendValue(path, val, extra);
+        Object.defineProperty(ForwardingSubscriber.prototype, "writeProg", {
+            get: function () {
+                return this.to.writeProg;
+            },
+            enumerable: true,
+            configurable: true
+        });
+        ForwardingSubscriber.prototype.sendValue = function (path, val, prog, extra) {
+            this.to.sendValue(path, val, prog, extra);
         };
         return ForwardingSubscriber;
     }());
@@ -551,9 +570,9 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.cached = {};
             this.cachedUpd = {};
         }
-        SortAwareForwardingSubscriber.prototype.sendValue = function (path, val, extra) {
+        SortAwareForwardingSubscriber.prototype.sendValue = function (path, val, prog, extra) {
             if (!this.sorting) {
-                _super.prototype.sendValue.call(this, path, val, extra);
+                _super.prototype.sendValue.call(this, path, val, prog, extra);
                 return;
             }
             if (!extra.q) {
@@ -563,30 +582,30 @@ var __extends = (this && this.__extends) || function (d, b) {
                     upcache = [];
                     this.cachedUpd[path] = upcache;
                 }
-                upcache.push({ p: path, v: val, e: extra });
+                upcache.push({ p: path, v: val, n: prog, e: extra });
             }
             else if (extra.aft) {
                 if (this.sent[extra.aft]) {
-                    this.forward(path, val, extra);
+                    this.forward(path, val, prog, extra);
                 }
                 else {
                     dbgBroker("Caching %s cause %s not yet sent", path, extra.aft);
-                    this.cached[extra.aft] = { p: path, v: val, e: extra };
+                    this.cached[extra.aft] = { p: path, v: val, n: prog, e: extra };
                 }
             }
             else {
-                this.forward(path, val, extra);
+                this.forward(path, val, prog, extra);
             }
         };
-        SortAwareForwardingSubscriber.prototype.forward = function (path, val, extra) {
+        SortAwareForwardingSubscriber.prototype.forward = function (path, val, prog, extra) {
             this.sent[path] = true;
-            _super.prototype.sendValue.call(this, path, val, extra);
+            _super.prototype.sendValue.call(this, path, val, prog, extra);
             var upcache = this.cachedUpd[path];
             if (upcache) {
                 dbgBroker("Sending cached updates to %s", path);
                 for (var i = 0; i < upcache.length; i++) {
                     var incache = upcache[i];
-                    _super.prototype.sendValue.call(this, incache.p, incache.v, incache.e);
+                    _super.prototype.sendValue.call(this, incache.p, incache.v, incache.n, incache.e);
                 }
             }
             incache = this.cached[path];
@@ -594,7 +613,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 return;
             delete this.cached[path];
             dbgBroker("Sending %s cause %s now is sent", incache.p, path);
-            this.forward(incache.p, incache.v, incache.e);
+            this.forward(incache.p, incache.v, incache.n, incache.e);
         };
         SortAwareForwardingSubscriber.prototype.stopSorting = function () {
             dbgBroker("Stop sorting and flushing cache");
@@ -606,7 +625,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 if (!incache)
                     continue;
                 delete this.cached[k];
-                this.forward(incache.p, incache.v, incache.e);
+                this.forward(incache.p, incache.v, incache.n, incache.e);
             }
             // Clear cache and sent
             this.cached = null;
@@ -734,7 +753,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 }
             }
         };
-        SimpleQueryState.prototype.sendValue = function (path, val, extra) {
+        SimpleQueryState.prototype.sendValue = function (path, val, prog, extra) {
             var extra = {};
             _a = Utils.normalizeUpdatedValue(path, val), path = _a[0], val = _a[1];
             dbgQuery("%s : Evaluating %s from modifications in %s in %s", this.id, path, val, this.pathRegex);
@@ -814,15 +833,16 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.ongoingWrite = null;
             this.writeQueue = [];
             this.readQueue = [];
+            this.writeProg = 1;
             this.id = socket.id.substr(2);
             dbgHandler("%s handler created", this.id);
             socket.on('sp', function (path, fn) { return _this.enqueueRead(function () { return filterAck(fn, _this.subscribePath(path)); }); });
             socket.on('up', function (path, fn) { return filterAck(fn, _this.unsubscribePath(path)); });
-            socket.on('pi', function (id, fn) { return filterAck(fn, _this.ping(id)); });
+            socket.on('pi', function (writeProg, fn) { return filterAck(fn, _this.ping(writeProg)); });
             socket.on('sq', function (def, fn) { return _this.enqueueRead(function () { return filterAck(fn, _this.subscribeQuery(def)); }); });
             socket.on('uq', function (id, fn) { return filterAck(fn, _this.unsubscribeQuery(id)); });
-            socket.on('s', function (path, val, fn) { return _this.enqueueWrite(function () { return _this.set(path, val, fn); }); });
-            socket.on('m', function (path, val, fn) { return _this.enqueueWrite(function () { return _this.merge(path, val, fn); }); });
+            socket.on('s', function (path, val, prog, fn) { return _this.enqueueWrite(function () { return _this.set(path, val, prog, fn); }); });
+            socket.on('m', function (path, val, prog, fn) { return _this.enqueueWrite(function () { return _this.merge(path, val, prog, fn); }); });
             socket.on('disconnect', function () {
                 _this.close();
             });
@@ -936,13 +956,15 @@ var __extends = (this && this.__extends) || function (d, b) {
             delete this.queries[id];
             return 'k';
         };
-        Handler.prototype.ping = function (id) {
-            dbgHandler("%s received ping %s", this.id, id);
-            return id;
+        Handler.prototype.ping = function (writeProg) {
+            dbgHandler("%s received ping %s", this.id, writeProg);
+            this.writeProg = writeProg;
+            return writeProg;
         };
-        Handler.prototype.set = function (path, val, cb) {
+        Handler.prototype.set = function (path, val, prog, cb) {
             var _this = this;
-            dbgHandler("%s writing in %s %o", this.id, path, val);
+            dbgHandler("%s writing prog %s in %s %o", this.id, prog, path, val);
+            this.writeProg = Math.max(this.writeProg, prog);
             // TODO security here
             this.broker.set(this, path, val)
                 .then(function () {
@@ -957,9 +979,10 @@ var __extends = (this && this.__extends) || function (d, b) {
                 // TODO how to handle errors?
             });
         };
-        Handler.prototype.merge = function (path, val, cb) {
+        Handler.prototype.merge = function (path, val, prog, cb) {
             var _this = this;
-            dbgHandler("%s merging in %s %o", this.id, path, val);
+            dbgHandler("%s merging prog %s in %s %o", this.id, prog, path, val);
+            this.writeProg = Math.max(this.writeProg, prog);
             // TODO security here
             this.broker.merge(this, path, val)
                 .then(function () {
@@ -974,12 +997,12 @@ var __extends = (this && this.__extends) || function (d, b) {
                 // TODO how to handle errors?
             });
         };
-        Handler.prototype.sendValue = function (path, val, extra) {
+        Handler.prototype.sendValue = function (path, val, prog, extra) {
             if (this.closed)
                 return;
             // TODO evaluate query matching
             // TODO security filter here?
-            var msg = { p: path, v: val };
+            var msg = { p: path, v: val, n: prog };
             for (var k in extra) {
                 msg[k] = extra[k];
             }
@@ -1002,7 +1025,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             if (this.closed)
                 return;
             dbgHandler("%s sending query exit %s:%s", this.id, queryId, path);
-            this.socket.emit('qx', { q: queryId, p: path });
+            this.socket.emit('qx', { q: queryId, p: path, n: this.writeProg });
         };
         return Handler;
     }());
