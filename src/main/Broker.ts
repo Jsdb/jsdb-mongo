@@ -101,9 +101,13 @@ export class Broker {
 
     public initCollection(collectionDb :string, collectionName :string, collectionOptions? :Mongo.MongoClientOptions) :this {
         if (this.started) throw new Error("Cannot change the collection on an already started broker");
+        dbgBroker("Connecting to collection on url %s collection %s options %o", collectionDb, collectionName, collectionOptions);
         this.startWait.push(Mongo.MongoClient.connect(collectionDb, collectionOptions).then((db)=>{
+            dbgBroker("Connected to db, opening %s collection", collectionName);
             this.collectionDb = db;
             this.collection = this.collectionDb.collection(collectionName);
+        }).then(()=>{
+            dbgBroker("Connected to collection");
         }).catch((err)=>{
             console.warn("Error opening collection connection",err);
             return Promise.reject(err);
@@ -112,10 +116,14 @@ export class Broker {
     }
 
     public initOplog(oplogDb :string) :this {
-        if (this.started) throw new Error("Cannot change the oplog on an already started broker");        
+        if (this.started) throw new Error("Cannot change the oplog on an already started broker");
+        dbgBroker("Connecting oplog %s", oplogDb);
         this.startWait.push(Mongo.MongoClient.connect(oplogDb).then((db)=>{
+            dbgBroker("Connected to db, opening oplog.rs collection");
             this.oplogDb = db;
             this.oplog = this.oplogDb.collection('oplog.rs');
+        }).then(()=>{
+            dbgBroker("Connected to oplog");
         }).catch((err)=>{
             console.warn("Error opening oplog connection",err);
             return Promise.reject(err);
@@ -125,7 +133,7 @@ export class Broker {
 
 
 	public setAuthService(value: AuthService) :this {
-        if (this.started) throw new Error("Cannot change the auth service on an already started broker");        
+        if (this.started) throw new Error("Cannot change the auth service on an already started broker");
 		this.auth = value;
         return this;
 	}
@@ -286,8 +294,8 @@ export class Broker {
                     this.broadcastToHandlers(k, null, alreadySent);
                 }
             }
-        }
-        if (typeof(val) == 'object' || typeof(val) == 'function') {
+        } else if (typeof(val) == 'object' || typeof(val) == 'function') {
+            delete val._id;
             for (var k in val) {
                 this.broadcastDown(path + '/' + k, val[k], alreadySent);
             }
@@ -297,6 +305,7 @@ export class Broker {
 
     private broadcastUp(path :string, val :any, fullpath :string, alreadySent :{[index:string]:Subscriber}) {
         if (!path) return;
+        if (val && val._id) delete val._id;
         this.broadcastToHandlers(path, val, alreadySent, fullpath);
         if (path.length == 0) return;
         this.broadcastUp(Utils.parentPath(path), val, fullpath, alreadySent);
@@ -315,7 +324,7 @@ export class Broker {
                 delete ps[k];
                 continue;
             }
-            handler.sendValue(tspath, val);
+            handler.sendValue(tspath, val, handler.writeProg);
         }
     }
 
@@ -464,6 +473,7 @@ export class Broker {
     fetch(handler :Subscriber, path :string, extra? :any) :Promise<any> {
         dbgBroker('Fetching %s for %s', path, handler.id);
         path = Utils.normalizePath(path);
+        var preprog = handler.writeProg || null;
         return this.collection
             .find({_id:Utils.pathRegexp(path)}).sort({_id:1})
             // TODO Replace this with .stream() so that it's interruptible
@@ -484,17 +494,17 @@ export class Broker {
                     for (var i = 0; i < data.length; i++) {
                         recomposer.add(data[i]);
                     }
-                    handler.sendValue(path,recomposer.get(), extra);
+                    handler.sendValue(path,recomposer.get(), preprog, extra);
                     return;
                 } 
                 this.collection.findOne({_id:Utils.parentPath(path)}).then((val)=>{
                     if (val == null) {
                         dbgBroker("Found no value on path %s using parent", path);
-                        handler.sendValue(path, null, extra);
+                        handler.sendValue(path, null, preprog, extra);
                     } else {
                         var leaf = Utils.leafPath(path);
                         dbgBroker("Found %s on path %s using parent", val[leaf], path);
-                        handler.sendValue(path, val[leaf], extra);
+                        handler.sendValue(path, val[leaf], preprog, extra);
                     }
                 });
             })
@@ -575,7 +585,8 @@ export interface SimpleQueryDef {
 export interface Subscriber {
     id :string;
     closed :boolean;
-    sendValue(path :string, val :any, extra? :any) :void;
+    writeProg? :number;
+    sendValue(path :string, val :any, prog :number, extra? :any) :void;
 }
 
 class ForwardingSubscriber implements Subscriber {
@@ -591,8 +602,12 @@ class ForwardingSubscriber implements Subscriber {
         return this.from.closed || this.to.closed;
     }
 
-    sendValue(path :string, val :any, extra? :any) :void {
-        this.to.sendValue(path, val, extra);
+    get writeProg() {
+        return this.to.writeProg;
+    }
+
+    sendValue(path :string, val :any, prog :number, extra? :any) :void {
+        this.to.sendValue(path, val, prog, extra);
     }
 }
 
@@ -603,9 +618,9 @@ class SortAwareForwardingSubscriber extends ForwardingSubscriber {
     protected cachedUpd :{[index:string]:any[]} = {};
 
 
-    sendValue(path :string, val :any, extra? :any) :void {
+    sendValue(path :string, val :any, prog :number, extra? :any) :void {
         if (!this.sorting) {
-            super.sendValue(path, val, extra);
+            super.sendValue(path, val, prog, extra);
             return;
         }
         if (!extra.q) {
@@ -615,29 +630,29 @@ class SortAwareForwardingSubscriber extends ForwardingSubscriber {
                 upcache = [];
                 this.cachedUpd[path] = upcache;
             }
-            upcache.push({p:path, v:val, e:extra});
+            upcache.push({p:path, v:val, n:prog, e:extra});
         } else if (extra.aft) {
             if (this.sent[extra.aft]) {
-                this.forward(path, val, extra);
+                this.forward(path, val, prog, extra);
             } else {
                 dbgBroker("Caching %s cause %s not yet sent", path, extra.aft);
-                this.cached[extra.aft] = {p:path, v:val, e:extra};
+                this.cached[extra.aft] = {p:path, v:val, n:prog, e:extra};
             }
         } else {
-            this.forward(path, val, extra);
+            this.forward(path, val, prog, extra);
         }
     }
 
-    forward(path :string, val :any, extra? :any) :void {
+    forward(path :string, val :any, prog :number, extra? :any) :void {
         this.sent[path] = true;
-        super.sendValue(path, val, extra);
+        super.sendValue(path, val, prog, extra);
 
         var upcache = this.cachedUpd[path];
         if (upcache) {
             dbgBroker("Sending cached updates to %s", path);
             for (var i = 0; i < upcache.length; i++) {
                 var incache = upcache[i];
-                super.sendValue(incache.p, incache.v, incache.e);
+                super.sendValue(incache.p, incache.v, incache.n, incache.e);
             }
         }
 
@@ -646,7 +661,7 @@ class SortAwareForwardingSubscriber extends ForwardingSubscriber {
 
         delete this.cached[path];
         dbgBroker("Sending %s cause %s now is sent", incache.p, path);
-        this.forward(incache.p, incache.v, incache.e);
+        this.forward(incache.p, incache.v, incache.n, incache.e);
     }
 
     stopSorting() {
@@ -658,7 +673,7 @@ class SortAwareForwardingSubscriber extends ForwardingSubscriber {
             var incache = this.cached[k];
             if (!incache) continue;
             delete this.cached[k];
-            this.forward(incache.p, incache.v, incache.e);
+            this.forward(incache.p, incache.v, incache.n, incache.e);
         }
         // Clear cache and sent
         this.cached = null;
@@ -801,7 +816,7 @@ export class SimpleQueryState implements Subscriber {
         }
     }
 
-    sendValue(path :string, val :any, extra? :any) :void {
+    sendValue(path :string, val :any, prog :number, extra? :any) :void {
         var extra :any = {};
         [path,val] = Utils.normalizeUpdatedValue(path,val);
         dbgQuery("%s : Evaluating %s from modifications in %s in %s", this.id, path, val, this.pathRegex);
@@ -860,6 +875,8 @@ export class Handler implements Subscriber {
     private writeQueue :Function[] = [];
     private readQueue :Function[] = [];
 
+    public writeProg = 1;
+
     // TODO a read-write lock that avoids sending to the client stale data.
     /*
      Approximate rules should be :
@@ -885,13 +902,13 @@ export class Handler implements Subscriber {
 
         socket.on('sp', (path:string,fn:Function)=>this.enqueueRead(()=>filterAck(fn,this.subscribePath(path))));
         socket.on('up', (path:string,fn:Function)=>filterAck(fn,this.unsubscribePath(path)));
-        socket.on('pi', (id:string,fn:Function)=>filterAck(fn,this.ping(id)));
+        socket.on('pi', (writeProg:number,fn:Function)=>filterAck(fn,this.ping(writeProg)));
 
         socket.on('sq', (def:SimpleQueryDef,fn:Function)=>this.enqueueRead(()=>filterAck(fn,this.subscribeQuery(def))));
         socket.on('uq', (id:string,fn:Function)=>filterAck(fn,this.unsubscribeQuery(id)));
         
-        socket.on('s', (path:string, val :any, fn:Function)=>this.enqueueWrite(()=>this.set(path,val, fn)));
-        socket.on('m', (path:string, val :any, fn:Function)=>this.enqueueWrite(()=>this.merge(path,val, fn)));
+        socket.on('s', (path:string, val :any, prog :number, fn:Function)=>this.enqueueWrite(()=>this.set(path,val,prog, fn)));
+        socket.on('m', (path:string, val :any, prog :number,fn:Function)=>this.enqueueWrite(()=>this.merge(path,val,prog, fn)));
 
         socket.on('disconnect', ()=>{
             this.close();
@@ -1020,13 +1037,15 @@ export class Handler implements Subscriber {
         return 'k';
     }
 
-    ping(id :string) :string {
-        dbgHandler("%s received ping %s", this.id, id);
-        return id;
+    ping(writeProg :number) :number {
+        dbgHandler("%s received ping %s", this.id, writeProg);
+        this.writeProg = writeProg;
+        return writeProg;
     }
 
-    set(path :string, val :any, cb :Function) {
-        dbgHandler("%s writing in %s %o", this.id, path, val);
+    set(path :string, val :any, prog :number, cb :Function) {
+        dbgHandler("%s writing prog %s in %s %o", this.id, prog, path, val);
+        this.writeProg = Math.max(this.writeProg, prog);
         // TODO security here
         this.broker.set(this, path, val)
         .then(()=>{
@@ -1042,8 +1061,9 @@ export class Handler implements Subscriber {
         });
     }
 
-    merge(path :string, val :any, cb :Function) {
-        dbgHandler("%s merging in %s %o", this.id, path, val);
+    merge(path :string, val :any, prog :number, cb :Function) {
+        dbgHandler("%s merging prog %s in %s %o", this.id, prog, path, val);
+        this.writeProg = Math.max(this.writeProg, prog);
         // TODO security here
         this.broker.merge(this, path, val)
         .then(()=>{
@@ -1059,11 +1079,11 @@ export class Handler implements Subscriber {
         });
     }
 
-    sendValue(path :string, val :any, extra? :any) {
+    sendValue(path :string, val :any, prog :number, extra? :any) {
         if (this.closed) return;
         // TODO evaluate query matching
         // TODO security filter here?
-        var msg :any = {p:path,v:val};
+        var msg :any = {p:path,v:val, n:prog};
         for (var k in extra) {
             msg[k] = extra[k];
         }
@@ -1086,7 +1106,7 @@ export class Handler implements Subscriber {
     queryExit(path :string, queryId :string) {
         if (this.closed) return;
         dbgHandler("%s sending query exit %s:%s", this.id, queryId, path);
-        this.socket.emit('qx', {q:queryId, p: path});
+        this.socket.emit('qx', {q:queryId, p: path, n:this.writeProg});
     }
 }
 

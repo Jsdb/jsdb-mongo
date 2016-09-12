@@ -285,7 +285,7 @@ describe("Broker >", ()=>{
                 return mongoColl.deleteMany({}).then(()=>{
                     return getConnectedClient();
                 }).then((cc)=>{
-                    return sendCommand(cc, 's', '/test/data', 'ciao');
+                    return sendCommand(cc, 's', '/test/data', 'ciao', 2);
                 }).then((ack)=>{
                     assert("returned correct ack",ack,'k');
                     return mongoColl.find({}).toArray();
@@ -299,7 +299,7 @@ describe("Broker >", ()=>{
                 return mongoColl.deleteMany({}).then(()=>{
                     return getConnectedClient();
                 }).then((cc)=>{
-                    return sendCommand(cc, 's', '/test/data', 100);
+                    return sendCommand(cc, 's', '/test/data', 100, 2);
                 }).then((ack)=>{
                     assert("returned correct ack",ack,'k');
                     return mongoColl.find({}).toArray();
@@ -313,7 +313,7 @@ describe("Broker >", ()=>{
                 return mongoColl.deleteMany({}).then(()=>{
                     return getConnectedClient();
                 }).then((cc)=>{
-                    return sendCommand(cc, 's', '/testData', {a:1});
+                    return sendCommand(cc, 's', '/testData', {a:1}, 2);
                 }).then((ack)=>{
                     assert("returned correct ack",ack,'k');
                     return mongoColl.find({}).toArray();
@@ -327,7 +327,7 @@ describe("Broker >", ()=>{
                 return mongoColl.deleteMany({}).then(()=>{
                     return getConnectedClient();
                 }).then((cc)=>{
-                    return sendCommand(cc, 's', '/test', 'ciao');
+                    return sendCommand(cc, 's', '/test', 'ciao', 2);
                 }).then((ack)=>{
                     assert("returned correct ack",ack,'k');
                     return mongoColl.find({}).toArray();
@@ -341,7 +341,7 @@ describe("Broker >", ()=>{
                 return mongoColl.deleteMany({}).then(()=>{
                     return getConnectedClient();
                 }).then((cc)=>{
-                    return sendCommand(cc, 's', '/user/1', {name:'simone',surname:'gianni',addresses:[{label:'home',line:'via tiburtina'},{label:'office',line:'viale carso'}]});
+                    return sendCommand(cc, 's', '/user/1', {name:'simone',surname:'gianni',addresses:[{label:'home',line:'via tiburtina'},{label:'office',line:'viale carso'}]}, 2);
                 }).then((ack)=>{
                     assert("returned correct ack",ack,'k');
                     return mongoColl.find({}).toArray();
@@ -358,7 +358,7 @@ describe("Broker >", ()=>{
                     return getConnectedClient();
                 }).then((ncc)=>{
                     cc = ncc;
-                    return sendCommand(cc, 's', '/test', {data1:'ciao',data2:'come',data3:'va'});
+                    return sendCommand(cc, 's', '/test', {data1:'ciao',data2:'come',data3:'va'}, 2);
                 }).then((ack)=>{
                     assert("returned correct ack",ack,'k');
                     return mongoColl.find({}).toArray();
@@ -366,7 +366,7 @@ describe("Broker >", ()=>{
                     assert("should exist only one data", data, is.array.withLength(1));
                     var rec = data[0];
                     assert("record is right", rec, is.strictly.object.matching({_id:'/test', data1:'ciao',data2:'come',data3:'va'}));
-                    return sendCommand(cc, 's', '/test/data2', 'quanto');
+                    return sendCommand(cc, 's', '/test/data2', 'quanto', 3);
                 }).then((ack)=>{
                     assert("returned correct ack",ack,'k');
                     return mongoColl.find({}).toArray();
@@ -400,7 +400,7 @@ describe("Broker >", ()=>{
                                 {name:'office',line:'via luca signorelli'}
                             ]
                         }
-                    ]);
+                    ], 1);
                 });
             });
 
@@ -422,7 +422,7 @@ describe("Broker >", ()=>{
 
             it('Should update simple object values', ()=>{
                 return getConnectedClient().then((cc)=>{
-                    return sendCommand(cc, 'm', '/users/0', {phone:'iphone',addresses:null,surname:null});
+                    return sendCommand(cc, 'm', '/users/0', {phone:'iphone',addresses:null,surname:null}, 2);
                 }).then((ack)=>{
                     assert("returned correct ack",ack,'k');
                     return mongoColl.find({}).toArray();
@@ -444,13 +444,13 @@ describe("Broker >", ()=>{
                 return getConnectedClient();
             }).then((ncc)=>{
                 cc = ncc;
-                return sendCommand(cc, 's', '/user/1', {name:'simone',surname:'gianni',addresses:[{label:'home',line:'via tiburtina'},{label:'office',line:'viale carso'}]});
+                return sendCommand(cc, 's', '/user/1', {name:'simone',surname:'gianni',addresses:[{label:'home',line:'via tiburtina'},{label:'office',line:'viale carso'}]}, 2);
             }).then((ack)=>{
                 assert("returned correct ack",ack,'k');
                 return mongoColl.find({}).toArray();
             }).then((data)=>{
                 assert("should exist all the data", data, is.array.withLength(3));
-                return sendCommand(cc, 's', '/user/1', null);
+                return sendCommand(cc, 's', '/user/1', null, 3);
             }).then((ack)=>{
                 assert("returned correct ack",ack,'k');
                 return mongoColl.find({}).toArray();
@@ -465,13 +465,13 @@ describe("Broker >", ()=>{
                 return getConnectedClient();
             }).then((ncc)=>{
                 cc = ncc;
-                return sendCommand(cc, 's', '/user/1', {name:'simone',surname:'gianni',addresses:[{label:'home',line:'via tiburtina'},{label:'office',line:'viale carso'}]});
+                return sendCommand(cc, 's', '/user/1', {name:'simone',surname:'gianni',addresses:[{label:'home',line:'via tiburtina'},{label:'office',line:'viale carso'}]}, 2);
             }).then((ack)=>{
                 assert("returned correct ack",ack,'k');
                 return mongoColl.find({}).toArray();
             }).then((data)=>{
                 assert("should exist all the data", data, is.array.withLength(3));
-                return sendCommand(cc, 's', '/user/1/addresses/1', null);
+                return sendCommand(cc, 's', '/user/1/addresses/1', null, 3);
             }).then((ack)=>{
                 assert("returned correct ack",ack,'k');
                 return mongoColl.find({}).toArray();
@@ -486,7 +486,7 @@ describe("Broker >", ()=>{
                 return getConnectedClient();
             }).then((ncc)=>{
                 cc = ncc;
-                return sendCommand(cc, 's', '/user/1', {name:'simone',surname:'gianni'});
+                return sendCommand(cc, 's', '/user/1', {name:'simone',surname:'gianni'}, 2);
             }).then((ack)=>{
                 assert("returned correct ack",ack,'k');
                 return mongoColl.find({}).toArray();
@@ -494,7 +494,7 @@ describe("Broker >", ()=>{
                 assert("should exist all the data", data, is.array.withLength(1));
                 var rec = data[0];
                 assert("object should match", rec, is.strictly.object.matching({_id:is.string,name:'simone',surname:'gianni'}));
-                return sendCommand(cc, 's', '/user/1/name', null);
+                return sendCommand(cc, 's', '/user/1/name', null, 3);
             }).then((ack)=>{
                 assert("returned correct ack",ack,'k');
                 return mongoColl.find({}).toArray();
@@ -533,7 +533,7 @@ describe("Broker >", ()=>{
                     ,
                     {name:'simone',surname:'ultro'}
                     ,
-                ]);
+                ], 1);
             });
         });
 
@@ -569,7 +569,7 @@ describe("Broker >", ()=>{
             it('Should fetch a simple object', (done)=>{
                 return getConnectedClient().then((cc)=>{
                     cc.connection.on('v',(pl)=>{
-                        assert("right payload", pl, is.object.matching({p:'/users/2',v:{name:'simone',surname:'altro'}}));
+                        assert("right payload", pl, is.object.matching({p:'/users/2',v:{name:'simone',surname:'altro'},n:1}));
                         done();
                     });
                     return sendCommand(cc, 'sp', '/users/2');
@@ -590,7 +590,8 @@ describe("Broker >", ()=>{
                                     {name:'home',line:'via tiburtina'},
                                     {name:'office',line:'viale carso'}
                                 ]
-                            }
+                            },
+                            n:1
                         }));
                         done();
                     });
@@ -603,7 +604,7 @@ describe("Broker >", ()=>{
             it('should fetch a specific value', (done)=>{
                 return getConnectedClient().then((cc)=>{
                     cc.connection.on('v',(pl)=>{
-                        assert("right payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
+                        assert("right payload", pl, is.object.matching({p:'/users/2/name',v:'simone',n:1}));
                         done();
                     });
                     return sendCommand(cc, 'sp', '/users/2/name');
@@ -623,7 +624,8 @@ describe("Broker >", ()=>{
                             match: is.object.matching({
                                 v: {
                                     users: is.defined
-                                }
+                                },
+                                n:1
                             })
                         }
                     ]);
@@ -645,9 +647,9 @@ describe("Broker >", ()=>{
                     cc = ncc;
                     cc.connection.on('v',(pl)=>{
                         if (evtCount == 0) {
-                            assert("right fetch payload", pl, is.object.matching({p:'/users/2',v:{name:'simone',surname:'altro'}}));
+                            assert("right fetch payload", pl, is.object.matching({p:'/users/2',v:{name:'simone',surname:'altro'},n:1}));
                         } else if (evtCount == 1) {
-                            assert("right update payload", pl, is.object.matching({p:'/users/2',v:{name:'simona',surname:'altrini'}}));
+                            assert("right update payload", pl, is.object.matching({p:'/users/2',v:{name:'simona',surname:'altrini'}, n:2}));
                             done();
                         }
                         evtCount++;
@@ -655,7 +657,7 @@ describe("Broker >", ()=>{
                     return sendCommand(cc, 'sp', '/users/2');
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
-                    return sendCommand(cc, 's', '/users/2',{name:'simona',surname:'altrini'});
+                    return sendCommand(cc, 's', '/users/2',{name:'simona',surname:'altrini'}, 2);
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
                 });
@@ -672,16 +674,16 @@ describe("Broker >", ()=>{
                     return sendCommand(cc, 'sp', '/users/2');
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
-                    return sendCommand(cc, 'm', '/users/2',{name:'simona',surname:null,phone:'iphone'});
+                    return sendCommand(cc, 'm', '/users/2',{name:'simona',surname:null,phone:'iphone'}, 2);
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
                     return wait(100);
                 }).then(()=>{
                     assert("right number of events", evts, is.array.withLength(4));
-                    assert("has event for name:simona", evts, is.array.containing(is.object.matching({"p":"/users/2","v":{"name":"simone","surname":"altro"}})));
-                    assert("has event for name:simona", evts, is.array.containing(is.object.matching({ p: '/users/2/name', v: 'simona' })));
-                    assert("has event for surname:null", evts, is.array.containing(is.object.matching({ p: '/users/2/surname', v: null })));
-                    assert("has event for phone:iphone", evts, is.array.containing(is.object.matching({ p: '/users/2/phone', v: 'iphone' })));
+                    assert("has event for name:simona", evts, is.array.containing(is.object.matching({"p":"/users/2","v":{"name":"simone","surname":"altro"},n:1})));
+                    assert("has event for name:simona", evts, is.array.containing(is.object.matching({ p: '/users/2/name', v: 'simona',n:2 })));
+                    assert("has event for surname:null", evts, is.array.containing(is.object.matching({ p: '/users/2/surname', v: null,n:2 })));
+                    assert("has event for phone:iphone", evts, is.array.containing(is.object.matching({ p: '/users/2/phone', v: 'iphone',n:2 })));
                 });
             });
             
@@ -696,9 +698,9 @@ describe("Broker >", ()=>{
                         console.log('in on(v) ' + evtCount);
                         pkprom.resolve();
                         if (evtCount == 0) {
-                            assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
+                            assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone',n:1}));
                         } else if (evtCount == 1) {
-                            assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:'sara'}));
+                            assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:'sara',n:2}));
                         }
                         evtCount++;
                     });
@@ -709,7 +711,7 @@ describe("Broker >", ()=>{
                     return pkprom;
                 }).then(()=>{
                     pkprom = extPromise();
-                    return sendCommand(cc, 's', '/users/2/name', 'sara');
+                    return sendCommand(cc, 's', '/users/2/name', 'sara', 2);
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
                     return pkprom;
@@ -723,9 +725,9 @@ describe("Broker >", ()=>{
                     cc = ncc;
                     cc.connection.on('v',(pl)=>{
                         if (evtCount == 0) {
-                            assert("right fetch payload", pl, is.object.matching({v:{0:is.object, 1:is.object, 2:is.object, 3:is.object}}));
+                            assert("right fetch payload", pl, is.object.matching({v:{0:is.object, 1:is.object, 2:is.object, 3:is.object},n:1}));
                         } else if (evtCount == 1) {
-                            assert("right update payload", pl, is.object.matching({p:'/users/2',v:{name:'simona',surname:'altrini'}}));
+                            assert("right update payload", pl, is.object.matching({p:'/users/2',v:{name:'simona',surname:'altrini'},n:2}));
                             done();
                         }
                         evtCount++;
@@ -733,7 +735,7 @@ describe("Broker >", ()=>{
                     return sendCommand(cc, 'sp', '/users');
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
-                    return sendCommand(cc, 's', '/users/2',{name:'simona',surname:'altrini'});
+                    return sendCommand(cc, 's', '/users/2',{name:'simona',surname:'altrini'}, 2);
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
                 });
@@ -746,9 +748,9 @@ describe("Broker >", ()=>{
                     cc = ncc;
                     cc.connection.on('v',(pl)=>{
                         if (evtCount == 0) {
-                            assert("right fetch payload", pl, is.object.matching({v:{0:is.object, 1:is.object, 2:is.object, 3:is.object}}));
+                            assert("right fetch payload", pl, is.object.matching({v:{0:is.object, 1:is.object, 2:is.object, 3:is.object},n:1}));
                         } else if (evtCount == 1) {
-                            assert("right update payload", pl, is.object.matching({p:'/users/2',v:null}));
+                            assert("right update payload", pl, is.object.matching({p:'/users/2',v:null,n:2}));
                             done();
                         }
                         evtCount++;
@@ -756,7 +758,7 @@ describe("Broker >", ()=>{
                     return sendCommand(cc, 'sp', '/users');
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
-                    return sendCommand(cc, 's', '/users/2',null);
+                    return sendCommand(cc, 's', '/users/2',null, 2);
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
                 });
@@ -769,9 +771,9 @@ describe("Broker >", ()=>{
                     cc = ncc;
                     cc.connection.on('v',(pl)=>{
                         if (evtCount == 0) {
-                            assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
+                            assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone',n:1}));
                         } else if (evtCount == 1) {
-                            assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:'simona'}));
+                            assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:'simona',n:2}));
                             done();
                         }
                         evtCount++;
@@ -779,7 +781,7 @@ describe("Broker >", ()=>{
                     return sendCommand(cc, 'sp', '/users/2/name');
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
-                    return sendCommand(cc, 's', '/users/2',{name:'simona',surname:'altrini'});
+                    return sendCommand(cc, 's', '/users/2',{name:'simona',surname:'altrini'}, 2);
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
                 });
@@ -794,9 +796,9 @@ describe("Broker >", ()=>{
                     cc.connection.on('v',(pl)=>{
                         pkprom.resolve();
                         if (evtCount == 0) {
-                            assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
+                            assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone',n:1}));
                         } else if (evtCount == 1) {
-                            assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:null}));
+                            assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:null,n:2}));
                         }
                         evtCount++;
                     });
@@ -807,7 +809,7 @@ describe("Broker >", ()=>{
                     return pkprom;
                 }).then(()=>{
                     pkprom = extPromise();
-                    return sendCommand(cc, 's', '/users/2',null);
+                    return sendCommand(cc, 's', '/users/2',null, 2);
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
                     return pkprom;
@@ -823,9 +825,9 @@ describe("Broker >", ()=>{
                     cc.connection.on('v',(pl)=>{
                         pkprom.resolve();
                         if (evtCount == 0) {
-                            assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone'}));
+                            assert("right fetch payload", pl, is.object.matching({p:'/users/2/name',v:'simone',n:1}));
                         } else if (evtCount == 1) {
-                            assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:null}));
+                            assert("right update payload", pl, is.object.matching({p:'/users/2/name',v:null,n:2}));
                         }
                         evtCount++;
                     });
@@ -835,7 +837,7 @@ describe("Broker >", ()=>{
                     return pkprom;
                 }).then(()=>{
                     pkprom = extPromise();
-                    return sendCommand(cc, 's', '/users/2/name', null);
+                    return sendCommand(cc, 's', '/users/2/name', null, 2);
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
                     return pkprom;
@@ -858,7 +860,7 @@ describe("Broker >", ()=>{
                         sendCommand(cc, 'sp', '/users/2/addresses/0/name')
                     ]);
                 }).then((ack)=>{
-                    return sendCommand(cc, 's', '/users/2/addresses', {0:{name:'office',line:'viale carso'}});
+                    return sendCommand(cc, 's', '/users/2/addresses', {0:{name:'office',line:'viale carso'}}, 2);
                 }).then((ack)=>{
                     assert('acked correctly', ack, 'k');
                     return wait(200);
@@ -882,7 +884,7 @@ describe("Broker >", ()=>{
                     for (var i = 0; i < 10; i++) {
                         vals[i] = { str: 'a'+i, num: i, invstr: 'a'+(99-i), invnum: 99-i, nest: {num:i}}
                     }
-                    return sendCommand(cc, 's', '/vals', vals);
+                    return sendCommand(cc, 's', '/vals', vals, 2);
                 });
             });
 
@@ -902,18 +904,19 @@ describe("Broker >", ()=>{
                                     }
                                 },
                                 q: 'q1',
+                                n: 1,
                                 aft: null
                             })
                         }
                         ,
                         {
                             event: 'v',
-                            match: is.object.matching({p:'/users/2', v:is.defined, q:'q1', aft: '/users/0'})
+                            match: is.object.matching({p:'/users/2', v:is.defined, q:'q1', n: 1, aft: '/users/0'})
                         }
                         ,
                         {
                             event: 'v',
-                            match: is.object.matching({p:'/users/3', v:is.defined, q:'q1', aft: '/users/2'})
+                            match: is.object.matching({p:'/users/3', v:is.defined, q:'q1', n: 1, aft: '/users/2'})
                         }
                         ,
                         {
@@ -934,7 +937,7 @@ describe("Broker >", ()=>{
                     for (var i = 0; i < 10; i++) {
                         var aft = null;
                         if (i > 0) aft = '/vals/' + (i-1);
-                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft, q:'q1'})});
+                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft, n: 1, q:'q1'})});
                     }
                     expect.push({event:'qd',match:is.defined});
 
@@ -969,7 +972,7 @@ describe("Broker >", ()=>{
                     for (var i = 9; i >= 0; i--) {
                         var aft = null;
                         if (i < 9) aft = '/vals/' + (i+1);
-                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft})});
+                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, n: 1, aft:aft})});
                     }
                     expect.push({event:'qd',match:is.defined});
 
@@ -989,7 +992,7 @@ describe("Broker >", ()=>{
                     for (var i = 9; i >= 0; i--) {
                         var aft = null;
                         if (i < 9) aft = '/vals/' + (i+1);
-                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft})});
+                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, n: 1, aft:aft})});
                     }
                     expect.push({event:'qd',match:is.defined});
 
@@ -1009,7 +1012,7 @@ describe("Broker >", ()=>{
                     for (var i = 0; i < 5; i++) {
                         var aft = null;
                         if (i > 0) aft = '/vals/' + (i-1);
-                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft, q:'q1'})});
+                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft, n: 1, q:'q1'})});
                     }
                     expect.push({event:'qd',match:is.defined});
 
@@ -1032,7 +1035,7 @@ describe("Broker >", ()=>{
                     for (var i = 0; i < 5; i++) {
                         var aft = null;
                         if (i > 0) aft = '/vals/' + (i-1);
-                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft, q:'q1'})});
+                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft, n: 1, q:'q1'})});
                     }
                     expect.push({event:'qd',match:is.defined});
 
@@ -1045,9 +1048,9 @@ describe("Broker >", ()=>{
                 }).then((evts)=>{
                     cc.eventCheck.stop();
                     cc.eventCheck = checkEvents(cc.connection, [
-                        {event:'v', match: is.object.matching({p:'/vals/3/name',v:'simone'})}
+                        {event:'v', match: is.object.matching({p:'/vals/3/name',v:'simone', n: 2})}
                     ]);
-                    return sendCommand(cc, 's', '/vals/3/name','simone');
+                    return sendCommand(cc, 's', '/vals/3/name','simone', 2);
                 }).then(()=>{
                     return cc.eventCheck;
                 }).then((evts)=>{
@@ -1055,7 +1058,7 @@ describe("Broker >", ()=>{
                     cc.connection.on('v', ()=>{
                         extraMessage = true;
                     });
-                    return sendCommand(cc, 's', '/vals/6/name','simone');
+                    return sendCommand(cc, 's', '/vals/6/name','simone', 3);
                 }).then(()=>{
                     return wait(100);
                 }).then(()=>{
@@ -1077,6 +1080,7 @@ describe("Broker >", ()=>{
                                     name: 'sara',
                                 },
                                 q: 'q1',
+                                n: 1,
                                 aft: null
                             })
                         }
@@ -1088,17 +1092,17 @@ describe("Broker >", ()=>{
                 }).then((evts)=>{
                     cc.eventCheck.stop();
                     cc.eventCheck = checkEvents(cc.connection, [
-                        {event:'v', match: is.object.matching({p:'/users/2',v:{name:'sara'},q:'q1'})}
+                        {event:'v', match: is.object.matching({p:'/users/2',v:{name:'sara'},q:'q1', n:2})}
                     ]);
-                    return sendCommand(cc, 's', '/users/2', {name:'sara'});
+                    return sendCommand(cc, 's', '/users/2', {name:'sara'}, 2);
                 }).then(()=>{
                     return cc.eventCheck;
                 }).then((evts)=>{
                     cc.eventCheck.stop();
                     cc.eventCheck = checkEvents(cc.connection, [
-                        {event:'qx', match: is.object.matching({p:'/users/2',q:'q1'})}
+                        {event:'qx', match: is.object.matching({p:'/users/2',q:'q1',n:3})}
                     ]);
-                    return sendCommand(cc, 's', '/users/2', {name:'simone'});
+                    return sendCommand(cc, 's', '/users/2', {name:'simone'}, 3);
                 }).then(()=>{
                     return cc.eventCheck;
                 });
@@ -1118,6 +1122,7 @@ describe("Broker >", ()=>{
                                     name: 'sara',
                                 },
                                 q: 'q1',
+                                n: 1,
                                 aft: null
                             })
                         }
@@ -1129,17 +1134,17 @@ describe("Broker >", ()=>{
                 }).then((evts)=>{
                     cc.eventCheck.stop();
                     cc.eventCheck = checkEvents(cc.connection, [
-                        {event:'v', match: is.object.matching({p:'/users/2',v:{name:'sara'},q:'q1'})}
+                        {event:'v', match: is.object.matching({p:'/users/2',v:{name:'sara'},q:'q1',n:2})}
                     ]);
-                    return sendCommand(cc, 's', '/users/2/name', 'sara');
+                    return sendCommand(cc, 's', '/users/2/name', 'sara', 2);
                 }).then(()=>{
                     return cc.eventCheck;
                 }).then((evts)=>{
                     cc.eventCheck.stop();
                     cc.eventCheck = checkEvents(cc.connection, [
-                        {event:'qx', match: is.object.matching({p:'/users/2',q:'q1'})}
+                        {event:'qx', match: is.object.matching({p:'/users/2',q:'q1',n:3})}
                     ]);
-                    return sendCommand(cc, 's', '/users/2/name', 'simone');
+                    return sendCommand(cc, 's', '/users/2/name', 'simone', 3);
                 }).then(()=>{
                     return cc.eventCheck;
                 });
