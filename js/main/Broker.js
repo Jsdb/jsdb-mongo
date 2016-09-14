@@ -1,5 +1,5 @@
 /**
- * TSDB Mongo 20160912_185749_master_1.0.0_b07a8ce
+ * TSDB Mongo 20160914_023457_master_1.0.0_65dd6c1
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -24,7 +24,7 @@ var __extends = (this && this.__extends) || function (d, b) {
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
-    exports.VERSION = "20160912_185749_master_1.0.0_b07a8ce";
+    exports.VERSION = "20160914_023457_master_1.0.0_65dd6c1";
     var NopAuthService = (function () {
         function NopAuthService() {
         }
@@ -365,19 +365,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         Broker.prototype.set = function (handler, path, val) {
             var _this = this;
             path = Utils.normalizePath(path);
-            if (val === null) {
-                var leaf = Utils.leafPath(path);
-                //if (!leaf) throw new Error('Cannot write a primitive value on root');
-                var par = Utils.parentPath(path);
-                dbgBroker("Unsetting %s -> %s", par, leaf);
-                var obj = {};
-                obj[leaf] = 1;
-                return Promise.all([
-                    this.del(handler, [path]),
-                    this.collection.updateOne({ _id: par }, { $unset: obj })
-                ]);
-            }
-            if (typeof val == 'string' || typeof val == 'number' || typeof val == 'boolean') {
+            if (val !== null && (typeof val == 'string' || typeof val == 'number' || typeof val == 'boolean')) {
                 // Saving a primitive value
                 var leaf = Utils.leafPath(path);
                 if (!leaf)
@@ -389,6 +377,18 @@ var __extends = (this && this.__extends) || function (d, b) {
                 return Promise.all([
                     this.del(handler, [path]),
                     this.collection.updateOne({ _id: par }, { $set: obj }, { upsert: true })
+                ]);
+            }
+            if (val === null || Utils.isEmpty(val)) {
+                var leaf = Utils.leafPath(path);
+                //if (!leaf) throw new Error('Cannot write a primitive value on root');
+                var par = Utils.parentPath(path);
+                dbgBroker("Unsetting %s -> %s", par, leaf);
+                var obj = {};
+                obj[leaf] = 1;
+                return Promise.all([
+                    this.del(handler, [path]),
+                    this.collection.updateOne({ _id: par }, { $unset: obj })
                 ]);
             }
             return this.collection.find({ _id: Utils.pathRegexp(path) }).sort({ _id: 1 }).toArray().then(function (pres) {
@@ -756,6 +756,13 @@ var __extends = (this && this.__extends) || function (d, b) {
         SimpleQueryState.prototype.sendValue = function (path, val, prog, extra) {
             var extra = {};
             _a = Utils.normalizeUpdatedValue(path, val), path = _a[0], val = _a[1];
+            if (path.indexOf(this.def.path) == 0) {
+                // A direct child has been nulled, check if exited
+                if (val == null) {
+                    dbgQuery("%s : Path %s is reported null", this.id, path);
+                    return this.checkExit(path);
+                }
+            }
             dbgQuery("%s : Evaluating %s from modifications in %s in %s", this.id, path, val, this.pathRegex);
             // Check if this makes a difference for the query in-out, find the value of the compareField
             if (path.match(this.pathRegex)) {

@@ -438,6 +438,26 @@ describe("Broker >", function () {
                 tsmatchers_1.assert("object should match", rec, tsmatchers_1.is.strictly.object.matching({ _id: tsmatchers_1.is.string, surname: 'gianni' }));
             });
         });
+        it('Should delete a sub path given as an empty object', function () {
+            var cc = null;
+            return mongoColl.deleteMany({}).then(function () {
+                return getConnectedClient();
+            }).then(function (ncc) {
+                cc = ncc;
+                return sendCommand(cc, 's', '/user/1', { name: 'simone', surname: 'gianni', addresses: [{ label: 'home', line: 'via tiburtina' }, { label: 'office', line: 'viale carso' }] }, 2);
+            }).then(function (ack) {
+                tsmatchers_1.assert("returned correct ack", ack, 'k');
+                return mongoColl.find({}).toArray();
+            }).then(function (data) {
+                tsmatchers_1.assert("should exist all the data", data, tsmatchers_1.is.array.withLength(3));
+                return sendCommand(cc, 's', '/user/1/addresses', {}, 3);
+            }).then(function (ack) {
+                tsmatchers_1.assert("returned correct ack", ack, 'k');
+                return mongoColl.find({}).toArray();
+            }).then(function (data) {
+                tsmatchers_1.assert("should have deleted some data", data, tsmatchers_1.is.array.withLength(1));
+            });
+        });
     });
     describe("Reading >", function () {
         beforeEach(function () {
@@ -959,6 +979,12 @@ describe("Broker >", function () {
                     return wait(100);
                 }).then(function () {
                     tsmatchers_1.assert("must not send a value object for objects outside the query", extraMessage, false);
+                    cc.eventCheck = checkEvents(cc.connection, [
+                        { event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/3/name', v: null, n: 4 }) }
+                    ]);
+                    return sendCommand(cc, 's', '/vals/3/name', null, 4);
+                }).then(function () {
+                    return cc.eventCheck;
                 });
             });
             it('Should notify of query entry/exit on equals condition change on set', function () {
@@ -997,6 +1023,38 @@ describe("Broker >", function () {
                         { event: 'qx', match: tsmatchers_1.is.object.matching({ p: '/users/2', q: 'q1', n: 3 }) }
                     ]);
                     return sendCommand(cc, 's', '/users/2', { name: 'simone' }, 3);
+                }).then(function () {
+                    return cc.eventCheck;
+                });
+            });
+            it('Should notify of query entry/exit on delete', function () {
+                var cc = null;
+                return getConnectedClient().then(function (ncc) {
+                    cc = ncc;
+                    cc.eventCheck = checkEvents(cc.connection, [
+                        {
+                            event: 'v',
+                            match: tsmatchers_1.is.object.matching({
+                                p: '/users/1',
+                                v: {
+                                    name: 'sara',
+                                },
+                                q: 'q1',
+                                n: 1,
+                                aft: null
+                            })
+                        }
+                    ]);
+                    return sendCommand(cc, 'sq', { id: 'q1', path: '/users', compareField: 'name', equals: 'sara' });
+                }).then(function (ack) {
+                    tsmatchers_1.assert("Got ack from the query", ack, 'k');
+                    return cc.eventCheck;
+                }).then(function (evts) {
+                    cc.eventCheck.stop();
+                    cc.eventCheck = checkEvents(cc.connection, [
+                        { event: 'qx', match: tsmatchers_1.is.object.matching({ p: '/users/1', q: 'q1', n: 2 }) }
+                    ]);
+                    return sendCommand(cc, 's', '/users/1', null, 2);
                 }).then(function () {
                     return cc.eventCheck;
                 });
