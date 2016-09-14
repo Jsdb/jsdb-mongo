@@ -55,7 +55,7 @@ export function pathRegexp(path: string, subpath?: string): RegExp {
 
 export function isEmpty(obj :any) :boolean {
     for (var k in obj) {
-        return true;
+        return false;
     }
-    return false;
+    return true;
 }

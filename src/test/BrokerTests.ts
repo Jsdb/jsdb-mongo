@@ -504,6 +504,28 @@ describe("Broker >", ()=>{
                 assert("object should match", rec, is.strictly.object.matching({_id:is.string,surname:'gianni'}));
             });
         });
+
+        it('Should delete a sub path given as an empty object', ()=>{
+            var cc :ConnectedClient = null;
+            return mongoColl.deleteMany({}).then(()=>{
+                return getConnectedClient();
+            }).then((ncc)=>{
+                cc = ncc;
+                return sendCommand(cc, 's', '/user/1', {name:'simone',surname:'gianni',addresses:[{label:'home',line:'via tiburtina'},{label:'office',line:'viale carso'}]}, 2);
+            }).then((ack)=>{
+                assert("returned correct ack",ack,'k');
+                return mongoColl.find({}).toArray();
+            }).then((data)=>{
+                assert("should exist all the data", data, is.array.withLength(3));
+                return sendCommand(cc, 's', '/user/1/addresses', {}, 3);
+            }).then((ack)=>{
+                assert("returned correct ack",ack,'k');
+                return mongoColl.find({}).toArray();
+            }).then((data)=>{
+                assert("should have deleted some data", data, is.array.withLength(1));
+            });
+        });
+
     });
 
     describe("Reading >", ()=>{
@@ -1063,6 +1085,12 @@ describe("Broker >", ()=>{
                     return wait(100);
                 }).then(()=>{
                     assert("must not send a value object for objects outside the query", extraMessage, false);
+                    cc.eventCheck = checkEvents(cc.connection, [
+                        {event:'v', match: is.object.matching({p:'/vals/3/name',v:null, n: 4})}
+                    ]);
+                    return sendCommand(cc, 's', '/vals/3/name',null, 4);
+                }).then(()=>{
+                    return cc.eventCheck;
                 });
             });
 
@@ -1103,6 +1131,40 @@ describe("Broker >", ()=>{
                         {event:'qx', match: is.object.matching({p:'/users/2',q:'q1',n:3})}
                     ]);
                     return sendCommand(cc, 's', '/users/2', {name:'simone'}, 3);
+                }).then(()=>{
+                    return cc.eventCheck;
+                });
+            });
+
+            it('Should notify of query entry/exit on delete', ()=>{
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.eventCheck = checkEvents(cc.connection,
+                    [
+                        {
+                            event: 'v',
+                            match: is.object.matching({
+                                p: '/users/1',
+                                v: {
+                                    name: 'sara',
+                                },
+                                q: 'q1',
+                                n: 1,
+                                aft: null
+                            })
+                        }
+                    ]);
+                    return sendCommand(cc, 'sq', {id:'q1',path:'/users',compareField:'name',equals:'sara'});
+                }).then((ack)=>{
+                    assert("Got ack from the query", ack, 'k');
+                    return cc.eventCheck;
+                }).then((evts)=>{
+                    cc.eventCheck.stop();
+                    cc.eventCheck = checkEvents(cc.connection, [
+                        {event:'qx', match: is.object.matching({p:'/users/1',q:'q1',n:2})}
+                    ]);
+                    return sendCommand(cc, 's', '/users/1', null, 2);
                 }).then(()=>{
                     return cc.eventCheck;
                 });

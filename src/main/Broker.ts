@@ -384,19 +384,7 @@ export class Broker {
 
     set(handler :Handler, path :string, val :any) :Promise<any> {
         path = Utils.normalizePath(path);
-        if (val === null) {
-            var leaf = Utils.leafPath(path);
-            //if (!leaf) throw new Error('Cannot write a primitive value on root');
-            var par = Utils.parentPath(path);
-            dbgBroker("Unsetting %s -> %s", par, leaf);
-            var obj :any = {};
-            obj[leaf] = 1;
-            return Promise.all([
-                this.del(handler, [path]),
-                this.collection.updateOne({_id:par},{$unset:obj})
-            ]);
-        }
-        if (typeof val == 'string' || typeof val == 'number' || typeof val == 'boolean') {
+        if (val !== null && (typeof val == 'string' || typeof val == 'number' || typeof val == 'boolean')) {
             // Saving a primitive value
             var leaf = Utils.leafPath(path);
             if (!leaf) throw new Error('Cannot write a primitive value on root');
@@ -407,6 +395,18 @@ export class Broker {
             return Promise.all([
                 this.del(handler, [path]),
                 this.collection.updateOne({_id:par},{$set:obj},{upsert:true})
+            ]);
+        }
+        if (val === null || Utils.isEmpty(val)) {
+            var leaf = Utils.leafPath(path);
+            //if (!leaf) throw new Error('Cannot write a primitive value on root');
+            var par = Utils.parentPath(path);
+            dbgBroker("Unsetting %s -> %s", par, leaf);
+            var obj :any = {};
+            obj[leaf] = 1;
+            return Promise.all([
+                this.del(handler, [path]),
+                this.collection.updateOne({_id:par},{$unset:obj})
             ]);
         }
 
@@ -819,6 +819,15 @@ export class SimpleQueryState implements Subscriber {
     sendValue(path :string, val :any, prog :number, extra? :any) :void {
         var extra :any = {};
         [path,val] = Utils.normalizeUpdatedValue(path,val);
+
+        if (path.indexOf(this.def.path) == 0) {
+            // A direct child has been nulled, check if exited
+            if (val == null) {
+                dbgQuery("%s : Path %s is reported null", this.id, path);
+                return this.checkExit(path);
+            }
+        }
+
         dbgQuery("%s : Evaluating %s from modifications in %s in %s", this.id, path, val, this.pathRegex);
         // Check if this makes a difference for the query in-out, find the value of the compareField
         if (path.match(this.pathRegex)) {
