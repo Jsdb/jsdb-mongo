@@ -1,5 +1,5 @@
 /**
- * TSDB Mongo 20160914_023457_master_1.0.0_65dd6c1
+ * TSDB Mongo 20160921_021225_master_1.0.0_7fbaeef
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -24,7 +24,7 @@ var __extends = (this && this.__extends) || function (d, b) {
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
-    exports.VERSION = "20160914_023457_master_1.0.0_65dd6c1";
+    exports.VERSION = "20160921_021225_master_1.0.0_7fbaeef";
     var NopAuthService = (function () {
         function NopAuthService() {
         }
@@ -420,8 +420,13 @@ var __extends = (this && this.__extends) || function (d, b) {
                     delpaths.push(k);
                 }
                 _this.del(handler, delpaths);
-                dbgBroker("For %s writing %s updates and %s delete operations in path %s with val %o", handler.id, ops.length, delpaths.length, path, val);
-                return _this.collection.bulkWrite(ops);
+                dbgBroker("For %s writing %s updates and %s delete operations in path %s with val %s", handler.id, ops.length, delpaths.length, path, JSON.stringify(ops));
+                return _this.collection.bulkWrite(ops, { ordered: false }).then(function (res) {
+                    var rres = res;
+                    if (!rres.hasWriteErrors())
+                        return null;
+                    throw new Error("Not all requested operations performed correctly : %o " + rres.getWriteErrors());
+                });
             });
         };
         Broker.prototype.recursiveUnroll = function (path, val, writes, dels) {
@@ -983,7 +988,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 _this.ongoingWrite = null;
                 _this.dequeue();
                 dbgHandler("Got error", e);
-                // TODO how to handle errors?
+                filterAck(cb, e.message);
             });
         };
         Handler.prototype.merge = function (path, val, prog, cb) {
@@ -1001,7 +1006,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 _this.ongoingWrite = null;
                 _this.dequeue();
                 dbgHandler("Got error", e);
-                // TODO how to handle errors?
+                filterAck(cb, e.message);
             });
         };
         Handler.prototype.sendValue = function (path, val, prog, extra) {

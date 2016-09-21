@@ -1212,6 +1212,36 @@ describe("Broker >", ()=>{
                 });
             });
 
+            it('Should find results for query on nested', ()=>{
+                var cc :ConnectedClient = null;
+                return getConnectedClient().then((ncc)=>{
+                    cc = ncc;
+                    cc.eventCheck = checkEvents(cc.connection,
+                    [
+                        {
+                            event: 'v',
+                            match: is.object.matching({
+                                p: '/vals/1',
+                                v: {
+                                    nest: {
+                                        num : 1
+                                    }
+                                },
+                                q: 'q1',
+                                n: 1,
+                                aft: null
+                            })
+                        }
+                    ]);
+                    return sendCommand(cc, 'sq', {id:'q1',path:'/vals',compareField:'nest/num',equals:1});
+                }).then((ack)=>{
+                    assert("Got ack from the query", ack, 'k');
+                    return cc.eventCheck;
+                }).then((evts)=>{
+                    cc.eventCheck.stop();
+                });
+            });
+
             // TODO check notification on change
 
             // TODO check entry/exit on range and limit
