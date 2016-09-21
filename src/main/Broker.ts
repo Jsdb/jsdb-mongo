@@ -442,8 +442,12 @@ export class Broker {
             }
             this.del(handler, delpaths);
 
-            dbgBroker("For %s writing %s updates and %s delete operations in path %s with val %o", handler.id, ops.length, delpaths.length, path, val);
-            return this.collection.bulkWrite(ops);
+            dbgBroker("For %s writing %s updates and %s delete operations in path %s with val %s", handler.id, ops.length, delpaths.length, path, JSON.stringify(ops));
+            return this.collection.bulkWrite(ops, {ordered:false}).then((res)=>{
+                var rres = <Mongo.BulkWriteResult>res;
+                if (!rres.hasWriteErrors()) return null;
+                throw new Error("Not all requested operations performed correctly : %o " + rres.getWriteErrors());
+            });
         });
     }
 
@@ -1066,7 +1070,7 @@ export class Handler implements Subscriber {
             this.ongoingWrite = null;
             this.dequeue();
             dbgHandler("Got error", e);
-            // TODO how to handle errors?
+            filterAck(cb,e.message);
         });
     }
 
@@ -1084,7 +1088,7 @@ export class Handler implements Subscriber {
             this.ongoingWrite = null;
             this.dequeue();
             dbgHandler("Got error", e);
-            // TODO how to handle errors?
+            filterAck(cb,e.message);
         });
     }
 
