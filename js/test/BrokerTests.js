@@ -1099,7 +1099,7 @@ describe("Broker >", function () {
                     return cc.eventCheck;
                 });
             });
-            it.only('Should find results for query on nested', function () {
+            it('Should find results for query on nested', function () {
                 var cc = null;
                 return getConnectedClient().then(function (ncc) {
                     cc = ncc;

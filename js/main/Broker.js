@@ -1,5 +1,5 @@
 /**
- * TSDB Mongo 20160921_021225_master_1.0.0_7fbaeef
+ * TSDB Mongo 20160921_034935_master_1.0.0_a525a0f
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -24,7 +24,7 @@ var __extends = (this && this.__extends) || function (d, b) {
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
-    exports.VERSION = "20160921_021225_master_1.0.0_7fbaeef";
+    exports.VERSION = "20160921_034935_master_1.0.0_a525a0f";
     var NopAuthService = (function () {
         function NopAuthService() {
         }

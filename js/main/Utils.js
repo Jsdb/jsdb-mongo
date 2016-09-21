@@ -60,8 +60,9 @@
         path = path.replace(/[\-\[\]\/\{\}\(\)\*\+\?\.\\\^\$\|]/g, "\\$&");
         if (typeof (subpath) == 'string') {
             subpath = subpath.replace(/[\-\[\]\/\{\}\(\)\*\+\?\.\\\^\$\|]/g, "\\$&");
-            if (subpath.charAt(0) != '/')
+            if (subpath.length > 0 && subpath.charAt(0) != '/')
                 subpath = '/' + subpath;
+            // TODO add here more subpath modifications, namely a way to say path=/users subpath=friends/*/_ref (to search for users having a friend in their set of friends)
             return new RegExp('^' + path + '\/[^\/]+' + subpath + '$');
         }
         else {
