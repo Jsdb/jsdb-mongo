@@ -60,6 +60,8 @@
         path = path.replace(/[\-\[\]\/\{\}\(\)\*\+\?\.\\\^\$\|]/g, "\\$&");
         if (typeof (subpath) == 'string') {
             subpath = subpath.replace(/[\-\[\]\/\{\}\(\)\*\+\?\.\\\^\$\|]/g, "\\$&");
+            if (subpath.charAt(0) != '/')
+                subpath = '/' + subpath;
             return new RegExp('^' + path + '\/[^\/]+' + subpath + '$');
         }
         else {
