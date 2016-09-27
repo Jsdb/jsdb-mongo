@@ -935,7 +935,7 @@ export class Handler implements Subscriber {
 
     private enqueueRead(fn :Function) {
         // If no write operation in the queue (waiting or executing) fire the read
-        if (this.writeQueue.length == 0) return fn();
+        if (this.writeQueue.length == 0 && !this.ongoingWrite) return fn();
         // Otherwise queue the read
         this.readQueue.push(fn);
 
@@ -967,7 +967,7 @@ export class Handler implements Subscriber {
         // Otherwise fire all reads
         var readfn :Function = null;
         while ((readfn = this.readQueue.pop())) {
-            dbgHandler("%s dequeuing write operation", this.id);
+            dbgHandler("%s dequeuing read operation", this.id);
             readfn();
         }
     }

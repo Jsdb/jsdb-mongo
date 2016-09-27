@@ -1,5 +1,5 @@
 /**
- * TSDB Mongo 20160921_034935_master_1.0.0_a525a0f
+ * TSDB Mongo 20160927_033747_master_1.0.0_cf04e49
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -24,7 +24,7 @@ var __extends = (this && this.__extends) || function (d, b) {
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
-    exports.VERSION = "20160921_034935_master_1.0.0_a525a0f";
+    exports.VERSION = "20160927_033747_master_1.0.0_cf04e49";
     var NopAuthService = (function () {
         function NopAuthService() {
         }
@@ -864,7 +864,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         }
         Handler.prototype.enqueueRead = function (fn) {
             // If no write operation in the queue (waiting or executing) fire the read
-            if (this.writeQueue.length == 0)
+            if (this.writeQueue.length == 0 && !this.ongoingWrite)
                 return fn();
             // Otherwise queue the read
             this.readQueue.push(fn);
@@ -894,7 +894,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             // Otherwise fire all reads
             var readfn = null;
             while ((readfn = this.readQueue.pop())) {
-                dbgHandler("%s dequeuing write operation", this.id);
+                dbgHandler("%s dequeuing read operation", this.id);
                 readfn();
             }
         };
