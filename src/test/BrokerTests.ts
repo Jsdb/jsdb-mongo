@@ -1047,6 +1047,26 @@ describe("Broker >", ()=>{
                 //    console.log(evts);
                 });
             });
+                
+            it.only('Should limit last results', ()=>{
+                return getConnectedClient().then((cc)=>{
+                    var expect :SocketEvent[] = [];
+                    for (var i = 0; i < 5; i++) {
+                        var aft = null;
+                        if (i > 0) aft = '/vals/' + (i-1);
+                        expect.push({event:'v', match: is.object.matching({p:'/vals/'+i, aft:aft, n: 1, q:'q1'})});
+                    }
+                    expect.push({event:'qd',match:is.defined});
+
+                    cc.eventCheck = checkEvents(cc.connection, expect);
+                    var def :SimpleQueryDef = {id:'q1',path:'/vals',limit:5,limitLast:true,compareField:'invnum'};
+                    var state = new SimpleQueryState(cc.handler, cc.broker, def);
+                    cc.broker.query(state);
+                    return cc.eventCheck;
+                //}).then((evts)=>{
+                //    console.log(evts);
+                });
+            });
 
             it('Should notify update of result in the query', ()=>{
                 var cc :ConnectedClient = null;

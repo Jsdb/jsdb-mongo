@@ -740,10 +740,17 @@ export class SimpleQueryState implements Subscriber {
     }
 
     positionFor(val :string) :number {
-        for (var i = 0; i < this.invalues.length; i++) {
-            if (this.invalues[i].value > val) return i;
+        if (this.def.limitLast) {
+            for (var i = 0; i < this.invalues.length; i++) {
+                if (this.invalues[i].value < val) return i;
+            }
+            return this.invalues.length;
+        } else {
+            for (var i = 0; i < this.invalues.length; i++) {
+                if (this.invalues[i].value > val) return i;
+            }
+            return this.invalues.length;
         }
-        return this.invalues.length;
     }
 
     /**

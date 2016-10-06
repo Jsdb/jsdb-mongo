@@ -1,5 +1,5 @@
 /**
- * TSDB Mongo 20160927_033747_master_1.0.0_cf04e49
+ * TSDB Mongo 20161006_032826_master_1.0.0_7271659
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -24,7 +24,7 @@ var __extends = (this && this.__extends) || function (d, b) {
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
-    exports.VERSION = "20160927_033747_master_1.0.0_cf04e49";
+    exports.VERSION = "20161006_032826_master_1.0.0_7271659";
     var NopAuthService = (function () {
         function NopAuthService() {
         }
@@ -683,11 +683,20 @@ var __extends = (this && this.__extends) || function (d, b) {
             configurable: true
         });
         SimpleQueryState.prototype.positionFor = function (val) {
-            for (var i = 0; i < this.invalues.length; i++) {
-                if (this.invalues[i].value > val)
-                    return i;
+            if (this.def.limitLast) {
+                for (var i = 0; i < this.invalues.length; i++) {
+                    if (this.invalues[i].value < val)
+                        return i;
+                }
+                return this.invalues.length;
             }
-            return this.invalues.length;
+            else {
+                for (var i = 0; i < this.invalues.length; i++) {
+                    if (this.invalues[i].value > val)
+                        return i;
+                }
+                return this.invalues.length;
+            }
         };
         /**
          * Start the query, subscribing where needed
@@ -715,7 +724,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 eleVal = Utils.leafPath(path);
             }
             ind = this.positionFor(eleVal);
-            //dbgBroker("For element %s the sort value is %s and the position %s", path, eleVal, ind);
+            dbgBroker("For element %s the sort value is %s and the position %s", path, eleVal, ind);
             var prePath = null;
             if (ind)
                 prePath = this.invalues[ind - 1].path;
