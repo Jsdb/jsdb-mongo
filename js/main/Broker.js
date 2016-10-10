@@ -1,5 +1,5 @@
 /**
- * TSDB Mongo 20161006_032826_master_1.0.0_7271659
+ * TSDB Mongo 20161010_030723_master_1.0.0_faa0c66
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -20,11 +20,12 @@ var __extends = (this && this.__extends) || function (d, b) {
     var Utils = require('./Utils');
     var events_1 = require('events');
     var dbgBroker = Debug('tsdb:mongo:broker');
+    var dbgDbConn = Debug('tsdb:mongo:dbconnection');
     var dbgQuery = Debug('tsdb:mongo:query');
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
-    exports.VERSION = "20161006_032826_master_1.0.0_7271659";
+    exports.VERSION = "20161010_030723_master_1.0.0_faa0c66";
     var NopAuthService = (function () {
         function NopAuthService() {
         }
@@ -45,6 +46,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.subscriptions = {};
             this.oplogMaxtime = null;
             this.oplogStream = null;
+            //(<any>Mongo).Logger.setLevel('debug');
             dbgBroker("Created broker %s", this.id);
             this.socket = $socket;
             if (collectionDb && collectionName) {
@@ -76,6 +78,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         };
         Broker.prototype.initCollection = function (collectionDb, collectionName, collectionOptions) {
             var _this = this;
+            if (collectionOptions === void 0) { collectionOptions = { db: { bufferMaxEntries: 5 } }; }
             if (this.started)
                 throw new Error("Cannot change the collection on an already started broker");
             dbgBroker("Connecting to collection on url %s collection %s options %o", collectionDb, collectionName, collectionOptions);
@@ -96,7 +99,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             if (this.started)
                 throw new Error("Cannot change the oplog on an already started broker");
             dbgBroker("Connecting oplog %s", oplogDb);
-            this.startWait.push(Mongo.MongoClient.connect(oplogDb).then(function (db) {
+            this.startWait.push(Mongo.MongoClient.connect(oplogDb, { db: { bufferMaxEntries: 5 } }).then(function (db) {
                 dbgBroker("Connected to db, opening oplog.rs collection");
                 _this.oplogDb = db;
                 _this.oplog = _this.oplogDb.collection('oplog.rs');
@@ -163,10 +166,12 @@ var __extends = (this && this.__extends) || function (d, b) {
                 return;
             var findMaxProm = null;
             if (!this.oplogMaxtime) {
+                dbgBroker("Connecting oplog, looking for maxtime");
                 findMaxProm = this.oplog.find({}).project({ ts: 1 }).sort({ $natural: -1 }).limit(1).toArray().then(function (max) {
                     var maxtime = new Mongo.Timestamp(0, Math.floor(new Date().getTime() / 1000));
                     if (max && max.length && max[0].ts)
                         maxtime = max[0].ts;
+                    _this.oplogMaxtime = maxtime;
                     return maxtime;
                 });
             }
@@ -176,8 +181,12 @@ var __extends = (this && this.__extends) || function (d, b) {
             return findMaxProm.then(function (maxtime) {
                 if (_this.closed)
                     return;
-                if (_this.oplogStream)
-                    _this.oplogStream.close();
+                dbgBroker("Connecting oplog");
+                if (_this.oplogStream) {
+                    var oldstream = _this.oplogStream;
+                    _this.oplogStream = null;
+                    oldstream.close();
+                }
                 var oplogStream = _this.oplogStream = _this.oplog
                     .find({ ts: { $gt: maxtime } })
                     .project({ op: 1, o: 1, o2: 1, ts: 1 })
@@ -223,6 +232,8 @@ var __extends = (this && this.__extends) || function (d, b) {
                 });
                 oplogStream.on('close', function () {
                     // Re-hook
+                    // Rehooking does not work, mongo tries to connect to the arbiter and gets stuck, in the meanwhile better to restart
+                    process.exit(1);
                     if (_this.closed)
                         return;
                     if (_this.oplogStream === oplogStream) {
@@ -232,9 +243,17 @@ var __extends = (this && this.__extends) || function (d, b) {
                 });
                 oplogStream.on('error', function (e) {
                     // Re-hook
+                    // Rehooking does not work, mongo tries to connect to the arbiter and gets stuck, in the meanwhile better to restart
+                    process.exit(1);
                     dbgBroker("Re-hooking on oplog after error", e);
                     oplogStream.close();
                 });
+                dbgBroker("Oplog connected");
+            }).catch(function (e) {
+                dbgBroker("Error connecting to the oplog, will retry in 1 second %o", e);
+                setTimeout(function () {
+                    _this.hookOplog();
+                }, 1000);
             });
         };
         Broker.prototype.register = function (handler) {
@@ -724,7 +743,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 eleVal = Utils.leafPath(path);
             }
             ind = this.positionFor(eleVal);
-            dbgBroker("For element %s the sort value is %s and the position %s", path, eleVal, ind);
+            //dbgBroker("For element %s the sort value is %s and the position %s", path, eleVal, ind);
             var prePath = null;
             if (ind)
                 prePath = this.invalues[ind - 1].path;

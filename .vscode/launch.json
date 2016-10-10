@@ -14,6 +14,15 @@
 			"sourceMaps": true,
 			"outDir": "${workspaceRoot}/js",
 			"localRoot": "${workspaceRoot}"
-		}
+		},
+		{
+            "name": "Attach to Process",
+            "type": "node",
+            "request": "attach",
+            "processId": "${command.PickProcess}",
+            "port": 5858,
+            "sourceMaps": false,
+            "outDir": null
+        }
 	]
 }

@@ -14,7 +14,7 @@
   "private": true,
   "dependencies": {
     "socket.io": "~1.4.8",
-    "mongodb": "~2.2.6",
+    "mongodb": "~2.2.10",
     "debug": "~2.2.0"
   },
   "devDependencies": {

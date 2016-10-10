@@ -11,6 +11,7 @@ import * as Utils from './Utils';
 import {EventEmitter} from 'events';
 
 var dbgBroker = Debug('tsdb:mongo:broker');
+var dbgDbConn = Debug('tsdb:mongo:dbconnection');
 var dbgQuery = Debug('tsdb:mongo:query');
 var dbgOplog = Debug('tsdb:mongo:oplog');
 var dbgSocket = Debug('tsdb:mongo:socket');
@@ -66,6 +67,7 @@ export class Broker {
 
 
     constructor($socket?: SocketIO.Server, collectionDb?: string, collectionName?: string, oplogDb?: string, collectionOptions? :any) {
+        //(<any>Mongo).Logger.setLevel('debug');
         dbgBroker("Created broker %s", this.id);
         this.socket = $socket;
         if (collectionDb && collectionName) {
@@ -99,7 +101,7 @@ export class Broker {
         return this;
     }
 
-    public initCollection(collectionDb :string, collectionName :string, collectionOptions? :Mongo.MongoClientOptions) :this {
+    public initCollection(collectionDb :string, collectionName :string, collectionOptions :Mongo.MongoClientOptions = {db: { bufferMaxEntries: 5 }}) :this {
         if (this.started) throw new Error("Cannot change the collection on an already started broker");
         dbgBroker("Connecting to collection on url %s collection %s options %o", collectionDb, collectionName, collectionOptions);
         this.startWait.push(Mongo.MongoClient.connect(collectionDb, collectionOptions).then((db)=>{
@@ -118,7 +120,7 @@ export class Broker {
     public initOplog(oplogDb :string) :this {
         if (this.started) throw new Error("Cannot change the oplog on an already started broker");
         dbgBroker("Connecting oplog %s", oplogDb);
-        this.startWait.push(Mongo.MongoClient.connect(oplogDb).then((db)=>{
+        this.startWait.push(Mongo.MongoClient.connect(oplogDb, {db: { bufferMaxEntries: 5 }}).then((db)=>{
             dbgBroker("Connected to db, opening oplog.rs collection");
             this.oplogDb = db;
             this.oplog = this.oplogDb.collection('oplog.rs');
@@ -185,9 +187,11 @@ export class Broker {
         if (this.closed) return;
         var findMaxProm :Promise<Mongo.Timestamp> = null;
         if (!this.oplogMaxtime) {
+            dbgBroker("Connecting oplog, looking for maxtime");
             findMaxProm = this.oplog.find({}).project({ts:1}).sort({$natural:-1}).limit(1).toArray().then((max)=>{
                 var maxtime = new Mongo.Timestamp(0, Math.floor(new Date().getTime() / 1000));
                 if (max && max.length && max[0].ts) maxtime = max[0].ts;
+                this.oplogMaxtime = maxtime;
                 return maxtime;
             });
         } else {
@@ -195,7 +199,12 @@ export class Broker {
         }
         return findMaxProm.then((maxtime)=>{
             if (this.closed) return;
-            if (this.oplogStream) this.oplogStream.close();
+            dbgBroker("Connecting oplog");
+            if (this.oplogStream) {
+                var oldstream = this.oplogStream;
+                this.oplogStream = null;
+                oldstream.close();
+            }
             var oplogStream = this.oplogStream = this.oplog
                 .find({ts:{$gt:maxtime}})
                 .project({op:1,o:1,o2:1,ts:1})
@@ -239,6 +248,8 @@ export class Broker {
             });
             oplogStream.on('close', ()=>{
                 // Re-hook
+                // Rehooking does not work, mongo tries to connect to the arbiter and gets stuck, in the meanwhile better to restart
+                process.exit(1);
                 if (this.closed) return;
                 if (this.oplogStream === oplogStream) {
                     dbgBroker("Re-hooking on oplog after a close event");
@@ -247,9 +258,17 @@ export class Broker {
             });
             oplogStream.on('error', (e:any)=>{
                 // Re-hook
+                // Rehooking does not work, mongo tries to connect to the arbiter and gets stuck, in the meanwhile better to restart
+                process.exit(1);
                 dbgBroker("Re-hooking on oplog after error", e);
                 oplogStream.close();
             });
+            dbgBroker("Oplog connected");
+        }).catch((e)=>{
+            dbgBroker("Error connecting to the oplog, will retry in 1 second %o", e);
+            setTimeout(()=>{
+                this.hookOplog();
+            }, 1000);
         });
     }
 
