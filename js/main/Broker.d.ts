@@ -60,8 +60,10 @@ export interface SimpleQueryDef {
     path?: string;
     compareField?: string;
     equals?: any;
+    valueIn?: any[];
     from?: string;
     to?: string;
+    sortField?: string;
     limit?: number;
     limitLast?: boolean;
 }

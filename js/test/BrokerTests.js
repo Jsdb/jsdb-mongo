@@ -886,6 +886,39 @@ describe("Broker >", function () {
                     //    console.log(evts);
                 });
             });
+            it('Should return with valueIn', function () {
+                return getConnectedClient().then(function (cc) {
+                    var expect = [];
+                    var ids = [2, 3, 6];
+                    for (var k = 0; k < ids.length; k++) {
+                        var aft = null;
+                        if (k > 0)
+                            aft = '/vals/' + ids[k - 1];
+                        expect.push({ event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/' + ids[k], aft: aft, n: 1, q: 'q1' }) });
+                    }
+                    expect.push({ event: 'qd', match: tsmatchers_1.is.defined });
+                    cc.eventCheck = checkEvents(cc.connection, expect);
+                    var def = { id: 'q1', path: '/vals', compareField: 'num', valueIn: ids };
+                    var state = new Broker_1.SimpleQueryState(cc.handler, cc.broker, def);
+                    cc.broker.query(state);
+                    return cc.eventCheck;
+                    //}).then((evts)=>{
+                    //    console.log(evts);
+                });
+            });
+            it('Should return nothing if nothing found on valueIn', function () {
+                return getConnectedClient().then(function (cc) {
+                    var expect = [];
+                    expect.push({ event: 'qd', match: tsmatchers_1.is.defined });
+                    cc.eventCheck = checkEvents(cc.connection, expect);
+                    var def = { id: 'q1', path: '/vals', compareField: 'num', valueIn: [99, 98] };
+                    var state = new Broker_1.SimpleQueryState(cc.handler, cc.broker, def);
+                    cc.broker.query(state);
+                    return cc.eventCheck;
+                    //}).then((evts)=>{
+                    //    console.log(evts);
+                });
+            });
             it('Should sort correctly on number', function () {
                 return getConnectedClient().then(function (cc) {
                     var expect = [];
@@ -943,7 +976,7 @@ describe("Broker >", function () {
                     //    console.log(evts);
                 });
             });
-            it.only('Should limit last results', function () {
+            it('Should limit last results', function () {
                 return getConnectedClient().then(function (cc) {
                     var expect = [];
                     for (var i = 0; i < 5; i++) {
@@ -962,7 +995,46 @@ describe("Broker >", function () {
                     //    console.log(evts);
                 });
             });
-            it('Should notify update of result in the query', function () {
+            it('Should sort correctly on strings when using explicit sortField', function () {
+                return getConnectedClient().then(function (cc) {
+                    var expect = [];
+                    for (var i = 9; i >= 0; i--) {
+                        var aft = null;
+                        if (i < 9)
+                            aft = '/vals/' + (i + 1);
+                        expect.push({ event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/' + i, n: 1, aft: aft }) });
+                    }
+                    expect.push({ event: 'qd', match: tsmatchers_1.is.defined });
+                    cc.eventCheck = checkEvents(cc.connection, expect);
+                    var def = { id: 'q1', sortField: 'invstr', path: '/vals' };
+                    var state = new Broker_1.SimpleQueryState(cc.handler, cc.broker, def);
+                    cc.broker.query(state);
+                    return cc.eventCheck;
+                    //}).then((evts)=>{
+                    //    console.log(evts);
+                });
+            });
+            it('Should filter and sort correctly', function () {
+                return getConnectedClient().then(function (cc) {
+                    var expect = [];
+                    for (var i = 7; i >= 3; i--) {
+                        var aft = null;
+                        if (i < 7)
+                            aft = '/vals/' + (i + 1);
+                        expect.push({ event: 'v', match: tsmatchers_1.is.object.matching({ p: '/vals/' + i, n: 1, aft: aft }) });
+                    }
+                    expect.push({ event: 'qd', match: tsmatchers_1.is.defined });
+                    cc.eventCheck = checkEvents(cc.connection, expect);
+                    var def = { id: 'q1', sortField: 'invstr', compareField: 'str', from: 'a2', to: 'a8', path: '/vals' };
+                    var state = new Broker_1.SimpleQueryState(cc.handler, cc.broker, def);
+                    cc.broker.query(state);
+                    return cc.eventCheck;
+                    //}).then((evts)=>{
+                    //    console.log(evts);
+                });
+            });
+            // TODO Working on avoiding subscribe to elements in the query to result in another value event being sent
+            it.skip('Should notify update of result in the query', function () {
                 var cc = null;
                 var extraMessage = false;
                 return getConnectedClient().then(function (ncc) {

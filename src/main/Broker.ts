@@ -249,8 +249,8 @@ export class Broker {
             oplogStream.on('close', ()=>{
                 // Re-hook
                 // Rehooking does not work, mongo tries to connect to the arbiter and gets stuck, in the meanwhile better to restart
-                process.exit(1);
                 if (this.closed) return;
+                process.exit(1);
                 if (this.oplogStream === oplogStream) {
                     dbgBroker("Re-hooking on oplog after a close event");
                     this.hookOplog();
@@ -259,6 +259,7 @@ export class Broker {
             oplogStream.on('error', (e:any)=>{
                 // Re-hook
                 // Rehooking does not work, mongo tries to connect to the arbiter and gets stuck, in the meanwhile better to restart
+                if (this.closed) return;
                 process.exit(1);
                 dbgBroker("Re-hooking on oplog after error", e);
                 oplogStream.close();
@@ -361,6 +362,12 @@ export class Broker {
 
         if (this.oplogStream) {
             proms.push(this.oplogStream.close());
+        }
+        if (this.oplogDb) {
+            proms.push(this.oplogDb.close());
+        }
+        if (this.collection) {
+            proms.push(this.collectionDb.close());
         }
 
         var handlerKeys = Object.getOwnPropertyNames(this.handlers);
@@ -547,6 +554,8 @@ export class Broker {
             var leafField = Utils.leafPath(def.compareField);
             if (typeof(def.equals) !== 'undefined') {
                 qo[leafField] = def.equals;
+            } else if (def.valueIn) {
+                qo[leafField] = {$in:def.valueIn};
             } else if (typeof(def.from) !== 'undefined' || typeof(def.to) !== 'undefined') {
                 qo[leafField] = {};
                 if (typeof(def.from) !== 'undefined') qo[leafField].$gt = def.from;
@@ -559,12 +568,16 @@ export class Broker {
         var cursor = this.collection.find(qo);
 
         var sortobj :any = {};
-        if (def.compareField && typeof(def.equals) == 'undefined') {
+        if (def.sortField) {
+            sortobj[def.sortField] = def.limitLast ? -1 : 1;
+        } else if (def.compareField && typeof(def.equals) == 'undefined') {
             sortobj[def.compareField] = def.limitLast ? -1 : 1;
         } else {
             sortobj['_id'] = def.limitLast ? -1 : 1;
         }
         cursor = cursor.sort(sortobj);
+
+        dbgBroker("%s sort object %o", queryState.id, sortobj);
 
         if (def.limit) {
             cursor = cursor.limit(def.limit);
@@ -597,8 +610,11 @@ export interface SimpleQueryDef {
     // Query part, what to compare, wether to find equals or limit from->to
     compareField? :string;
     equals? :any;
+    valueIn? :any[];
     from? :string;
     to? :string;
+
+    sortField? :string;
 
     // Limit by number
     limit? :number;
@@ -797,11 +813,19 @@ export class SimpleQueryState implements Subscriber {
         } else {
             eleVal = Utils.leafPath(path);
         }
-        ind = this.positionFor(eleVal);
-        //dbgBroker("For element %s the sort value is %s and the position %s", path, eleVal, ind);
+
+        var eleSort :any = null;
+        if (this.def.sortField) {
+            eleSort = data[Utils.leafPath(this.def.sortField)]
+        } else {
+            eleSort = eleVal;
+        }
+
+        ind = this.positionFor(eleSort);
+        //dbgBroker("For element %s the sort value is %s and the position %s", path, eleSort, ind);
         var prePath :string = null;
         if (ind) prePath = this.invalues[ind-1].path;
-        this.invalues.splice(ind,0,{path:path,value:eleVal});
+        this.invalues.splice(ind,0,{path:path,value:eleSort});
         this.fetchingCnt++;
         this.broker.subscribe(this.forwarder, path);
         this.broker.fetch(this.forwarder, path, {q:this.id, aft:prePath}).then(()=>{
@@ -870,18 +894,28 @@ export class SimpleQueryState implements Subscriber {
             // Check if the value is in the acceptable range
             if (typeof(this.def.equals) !== 'undefined') {
                 if (this.def.equals != eleVal) return this.checkExit(path);
+            } else if (this.def.valueIn) {
+                if (this.def.valueIn.indexOf(eleVal) == -1) return this.checkExit(path);
             } else if (typeof(this.def.from) !== 'undefined') {
                 if (eleVal < this.def.from) return this.checkExit(path);
             } else if (typeof(this.def.to) !== 'undefined') {
                 if (eleVal > this.def.to) return this.checkExit(path);
             }
-            var pos = this.positionFor(eleVal);
+
+            var eleSort :any = null;
+            if (this.def.sortField) {
+                eleSort = val[Utils.leafPath(this.def.sortField)]
+            } else {
+                eleSort = eleVal;
+            }
+
+            var pos = this.positionFor(eleSort);
             if (this.def.limit) {
                 // If the position is over the limit we can discard this
                 if (pos >= this.def.limit) return this.checkExit(path);
             }
             // We have a new value to insert
-            this.invalues.splice(pos,0,{path:path,value:eleVal});
+            this.invalues.splice(pos,0,{path:path,value:eleSort});
             var prePath :string = null;
             if (pos) prePath = this.invalues[pos-1].path;
             this.broker.fetch(this.forwarder, path, {q:this.id, aft:prePath});

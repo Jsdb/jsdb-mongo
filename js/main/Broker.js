@@ -1,5 +1,5 @@
 /**
- * TSDB Mongo 20161010_030723_master_1.0.0_faa0c66
+ * TSDB Mongo 20161014_024100_master_1.0.0_b0444d2
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -25,7 +25,7 @@ var __extends = (this && this.__extends) || function (d, b) {
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
-    exports.VERSION = "20161010_030723_master_1.0.0_faa0c66";
+    exports.VERSION = "20161014_024100_master_1.0.0_b0444d2";
     var NopAuthService = (function () {
         function NopAuthService() {
         }
@@ -233,9 +233,9 @@ var __extends = (this && this.__extends) || function (d, b) {
                 oplogStream.on('close', function () {
                     // Re-hook
                     // Rehooking does not work, mongo tries to connect to the arbiter and gets stuck, in the meanwhile better to restart
-                    process.exit(1);
                     if (_this.closed)
                         return;
+                    process.exit(1);
                     if (_this.oplogStream === oplogStream) {
                         dbgBroker("Re-hooking on oplog after a close event");
                         _this.hookOplog();
@@ -244,6 +244,8 @@ var __extends = (this && this.__extends) || function (d, b) {
                 oplogStream.on('error', function (e) {
                     // Re-hook
                     // Rehooking does not work, mongo tries to connect to the arbiter and gets stuck, in the meanwhile better to restart
+                    if (_this.closed)
+                        return;
                     process.exit(1);
                     dbgBroker("Re-hooking on oplog after error", e);
                     oplogStream.close();
@@ -344,6 +346,12 @@ var __extends = (this && this.__extends) || function (d, b) {
             var proms = [];
             if (this.oplogStream) {
                 proms.push(this.oplogStream.close());
+            }
+            if (this.oplogDb) {
+                proms.push(this.oplogDb.close());
+            }
+            if (this.collection) {
+                proms.push(this.collectionDb.close());
             }
             var handlerKeys = Object.getOwnPropertyNames(this.handlers);
             for (var i = 0; i < handlerKeys.length; i++) {
@@ -525,6 +533,9 @@ var __extends = (this && this.__extends) || function (d, b) {
                 if (typeof (def.equals) !== 'undefined') {
                     qo[leafField] = def.equals;
                 }
+                else if (def.valueIn) {
+                    qo[leafField] = { $in: def.valueIn };
+                }
                 else if (typeof (def.from) !== 'undefined' || typeof (def.to) !== 'undefined') {
                     qo[leafField] = {};
                     if (typeof (def.from) !== 'undefined')
@@ -536,13 +547,17 @@ var __extends = (this && this.__extends) || function (d, b) {
             dbgBroker("%s query object %o", queryState.id, qo);
             var cursor = this.collection.find(qo);
             var sortobj = {};
-            if (def.compareField && typeof (def.equals) == 'undefined') {
+            if (def.sortField) {
+                sortobj[def.sortField] = def.limitLast ? -1 : 1;
+            }
+            else if (def.compareField && typeof (def.equals) == 'undefined') {
                 sortobj[def.compareField] = def.limitLast ? -1 : 1;
             }
             else {
                 sortobj['_id'] = def.limitLast ? -1 : 1;
             }
             cursor = cursor.sort(sortobj);
+            dbgBroker("%s sort object %o", queryState.id, sortobj);
             if (def.limit) {
                 cursor = cursor.limit(def.limit);
             }
@@ -742,12 +757,19 @@ var __extends = (this && this.__extends) || function (d, b) {
             else {
                 eleVal = Utils.leafPath(path);
             }
-            ind = this.positionFor(eleVal);
-            //dbgBroker("For element %s the sort value is %s and the position %s", path, eleVal, ind);
+            var eleSort = null;
+            if (this.def.sortField) {
+                eleSort = data[Utils.leafPath(this.def.sortField)];
+            }
+            else {
+                eleSort = eleVal;
+            }
+            ind = this.positionFor(eleSort);
+            //dbgBroker("For element %s the sort value is %s and the position %s", path, eleSort, ind);
             var prePath = null;
             if (ind)
                 prePath = this.invalues[ind - 1].path;
-            this.invalues.splice(ind, 0, { path: path, value: eleVal });
+            this.invalues.splice(ind, 0, { path: path, value: eleSort });
             this.fetchingCnt++;
             this.broker.subscribe(this.forwarder, path);
             this.broker.fetch(this.forwarder, path, { q: this.id, aft: prePath }).then(function () {
@@ -811,6 +833,10 @@ var __extends = (this && this.__extends) || function (d, b) {
                     if (this.def.equals != eleVal)
                         return this.checkExit(path);
                 }
+                else if (this.def.valueIn) {
+                    if (this.def.valueIn.indexOf(eleVal) == -1)
+                        return this.checkExit(path);
+                }
                 else if (typeof (this.def.from) !== 'undefined') {
                     if (eleVal < this.def.from)
                         return this.checkExit(path);
@@ -819,14 +845,21 @@ var __extends = (this && this.__extends) || function (d, b) {
                     if (eleVal > this.def.to)
                         return this.checkExit(path);
                 }
-                var pos = this.positionFor(eleVal);
+                var eleSort = null;
+                if (this.def.sortField) {
+                    eleSort = val[Utils.leafPath(this.def.sortField)];
+                }
+                else {
+                    eleSort = eleVal;
+                }
+                var pos = this.positionFor(eleSort);
                 if (this.def.limit) {
                     // If the position is over the limit we can discard this
                     if (pos >= this.def.limit)
                         return this.checkExit(path);
                 }
                 // We have a new value to insert
-                this.invalues.splice(pos, 0, { path: path, value: eleVal });
+                this.invalues.splice(pos, 0, { path: path, value: eleSort });
                 var prePath = null;
                 if (pos)
                     prePath = this.invalues[pos - 1].path;
