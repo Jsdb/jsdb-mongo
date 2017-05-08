@@ -1223,6 +1223,138 @@ describe("Broker >", function () {
         });
     });
 });
+describe("Security >", function () {
+    describe("SimpleAuthData >", function () {
+        it("Should setup correct functions", function () {
+            var sar = new Broker_1.SimpleAuthRules();
+            sar.addRule("/users/$uid/password", function () { return false; });
+            sar.addRule("/users/$uid/projects", function () { return false; });
+            sar.addRule("/users/$uid", function () { return false; });
+            sar.addRule("/projects/$pid", function () { return false; });
+            tsmatchers_1.assert("Rules are in a correct tree", sar.rules, tsmatchers_1.is.object.matching({
+                users: {
+                    "$uid": {
+                        password: {
+                            __function: tsmatchers_1.is.function
+                        },
+                        projects: {
+                            __function: tsmatchers_1.is.function
+                        },
+                        __function: tsmatchers_1.is.function
+                    }
+                },
+                projects: {
+                    "$pid": {
+                        __function: tsmatchers_1.is.function
+                    }
+                }
+            }));
+        });
+        it("Should normalize and denormalize path and object", function () {
+            var sar = new Broker_1.SimpleAuthRules();
+            var normalized = sar.normalize("/users/123", { name: "simone", projects: { "456": true } });
+            tsmatchers_1.assert("Object is normalized", normalized, tsmatchers_1.is.object.matching({
+                users: {
+                    "123": {
+                        name: "simone",
+                        projects: {
+                            "456": true
+                        }
+                    }
+                }
+            }));
+            var denormalized = sar.denormalize("/users/123", normalized);
+            tsmatchers_1.assert("Object is denormalized", denormalized, tsmatchers_1.is.object.matching({
+                name: "simone",
+                projects: {
+                    "456": true
+                }
+            }));
+        });
+        it("Should apply correct functions", function () {
+            var calls = [];
+            var logCall = function (val) {
+                return function () {
+                    calls.push(val);
+                    return true;
+                };
+            };
+            var sar = new Broker_1.SimpleAuthRules();
+            sar.addRule("/users/123/password", logCall("pass"));
+            sar.addRule("/users/123/projects", logCall("proj"));
+            sar.addRule("/users/123", logCall("user"));
+            sar.addRule("/projects/456", logCall("project"));
+            sar.filterValue("/users/123", { name: "simone", projects: { "456": true } }, null);
+            tsmatchers_1.assert(calls, tsmatchers_1.is.array.equals(["user", "proj"]));
+        });
+        it("Shoud remove leaf", function () {
+            var sar = new Broker_1.SimpleAuthRules();
+            sar.addRule("/users/123/password", function () { return false; });
+            sar.addRule("/users/123/projects", function () { return true; });
+            sar.addRule("/users/123/name", function () { return "topsecret"; });
+            var result = sar.filterValue("/users/123", { name: "simone", password: "secret", projects: { "456": true } }, null);
+            tsmatchers_1.assert("leafs manipulated correctly", result, tsmatchers_1.is.object.matching({
+                name: "topsecret",
+                password: tsmatchers_1.is.undefined,
+                projects: {
+                    "456": true
+                }
+            }));
+        });
+        it("Should replace subtree", function () {
+            var sar = new Broker_1.SimpleAuthRules();
+            sar.addRule("/users/123/users", function () { return false; });
+            sar.addRule("/users/123/projects", function () { return true; });
+            sar.addRule("/users/123/mentions", function () { return ({ a: 1, b: 2, c: 3 }); });
+            var result = sar.filterValue("/users/123", { users: { d: 4, e: 5 }, projects: { "456": true }, mentions: { f: 6, g: 7 } }, null);
+            tsmatchers_1.assert("subtrees manipulated correctly", result, tsmatchers_1.is.object.matching({
+                users: tsmatchers_1.is.undefined,
+                projects: {
+                    "456": true
+                },
+                mentions: { a: 1, b: 2, c: 3 }
+            }));
+        });
+        it("Should fill matchings", function () {
+            var calls = {};
+            var logCall = function (key) {
+                return function (matching) {
+                    calls[key] = matching;
+                    return true;
+                };
+            };
+            var sar = new Broker_1.SimpleAuthRules();
+            sar.addRule("/users/$uid", logCall("userRoot"));
+            sar.addRule("/users/$uid/name", logCall("userName"));
+            sar.addRule("/users/$uid/projects/$pid", logCall("userProject"));
+            sar.addRule("/projects/$pid/name", logCall("projectName"));
+            sar.filterValue("/users/123", { name: "simone", password: "secret", projects: { "456": true } }, null);
+            sar.filterValue("/projects/888", { name: "prj" }, null);
+            tsmatchers_1.assert("Matching is correct", calls, tsmatchers_1.is.object.matching({
+                userRoot: { $uid: "123" },
+                userName: { $uid: "123" },
+                userProject: { $uid: "123", $pid: "456" },
+                projectName: { $pid: "888" }
+            }));
+        });
+        it("Should iterate on matchings", function () {
+            var calls = [];
+            var logCall = function () {
+                return function (matching) {
+                    calls.push(matching);
+                    return true;
+                };
+            };
+            var sar = new Broker_1.SimpleAuthRules();
+            sar.addRule("/users/$uid/name", logCall());
+            sar.filterValue("/users", { "1": { name: "simone" }, "2": { name: "gili" }, "3": { name: "who" } }, null);
+            tsmatchers_1.assert("Iterated on all three users", calls, tsmatchers_1.is.array.withLength(3));
+            tsmatchers_1.assert("User 1 is correct", calls[0], tsmatchers_1.is.strictly.object.matching({ $uid: "1" }));
+            tsmatchers_1.assert("User 2 is correct", calls[1], tsmatchers_1.is.strictly.object.matching({ $uid: "2" }));
+            tsmatchers_1.assert("User 3 is correct", calls[2], tsmatchers_1.is.strictly.object.matching({ $uid: "3" }));
+        });
+    });
+});
 function wait(to) {
     return new Promise(function (res, rej) {
         setTimeout(function () { return res(null); }, to);

@@ -1,5 +1,5 @@
 /**
- * TSDB Mongo 20161014_024100_master_1.0.0_b0444d2
+ * TSDB Mongo 20170508_051918_master_1.0.0_907d3bb
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -25,15 +25,8 @@ var __extends = (this && this.__extends) || function (d, b) {
     var dbgOplog = Debug('tsdb:mongo:oplog');
     var dbgSocket = Debug('tsdb:mongo:socket');
     var dbgHandler = Debug('tsdb:mongo:handler');
-    exports.VERSION = "20161014_024100_master_1.0.0_b0444d2";
-    var NopAuthService = (function () {
-        function NopAuthService() {
-        }
-        NopAuthService.prototype.authenticate = function (socket) {
-            return Promise.resolve({});
-        };
-        return NopAuthService;
-    }());
+    var dbgRules = Debug('tsdb:mongo:rules');
+    exports.VERSION = "20170508_051918_master_1.0.0_907d3bb";
     var progHandler = 0;
     var Broker = (function () {
         function Broker($socket, collectionDb, collectionName, oplogDb, collectionOptions) {
@@ -505,19 +498,20 @@ var __extends = (this && this.__extends) || function (d, b) {
                         recomposer.add(data[i]);
                     }
                     handler.sendValue(path, recomposer.get(), preprog, extra);
-                    return;
                 }
-                _this.collection.findOne({ _id: Utils.parentPath(path) }).then(function (val) {
-                    if (val == null) {
-                        dbgBroker("Found no value on path %s using parent", path);
-                        handler.sendValue(path, null, preprog, extra);
-                    }
-                    else {
-                        var leaf = Utils.leafPath(path);
-                        dbgBroker("Found %s on path %s using parent", val[leaf], path);
-                        handler.sendValue(path, val[leaf], preprog, extra);
-                    }
-                });
+                else {
+                    _this.collection.findOne({ _id: Utils.parentPath(path) }).then(function (val) {
+                        if (val == null) {
+                            dbgBroker("Found no value on path %s using parent", path);
+                            handler.sendValue(path, null, preprog, extra);
+                        }
+                        else {
+                            var leaf = Utils.leafPath(path);
+                            dbgBroker("Found %s on path %s using parent", val[leaf], path);
+                            handler.sendValue(path, val[leaf], preprog, extra);
+                        }
+                    });
+                }
             })
                 .catch(function (e) {
                 dbgBroker("Had error %s", e);
@@ -546,6 +540,15 @@ var __extends = (this && this.__extends) || function (d, b) {
             }
             dbgBroker("%s query object %o", queryState.id, qo);
             var cursor = this.collection.find(qo);
+            cursor.count(false, function (err, num) {
+                queryState.counted(num);
+                if (def.limit === 0) {
+                    queryState.foundEnd();
+                }
+            });
+            if (def.limit === 0) {
+                return;
+            }
             var sortobj = {};
             if (def.sortField) {
                 sortobj[def.sortField] = def.limitLast ? -1 : 1;
@@ -558,19 +561,38 @@ var __extends = (this && this.__extends) || function (d, b) {
             }
             cursor = cursor.sort(sortobj);
             dbgBroker("%s sort object %o", queryState.id, sortobj);
-            if (def.limit) {
-                cursor = cursor.limit(def.limit);
+            if (def.limit > 0) {
+                cursor = cursor.batchSize(def.limit);
             }
             //return cursor.toArray().then((data)=>console.log(data));
+            var counter = 0;
+            function handle(data) {
+                if (!data || counter > def.limit) {
+                    queryState.foundEnd();
+                    dbgBroker("%s cursor end", def.id);
+                    return null;
+                }
+                else {
+                    var elementUrl = Utils.limitToChild(data._id, def.path);
+                    if (queryState.found(elementUrl, data)) {
+                        counter++;
+                    }
+                    return cursor.next().then(handle);
+                }
+            }
+            cursor.next().then(handle);
+            /*
             cursor = cursor.stream();
-            cursor.on('data', function (data) {
+    
+            cursor.on('data', (data :any)=>{
                 var elementUrl = Utils.limitToChild(data._id, def.path);
                 queryState.found(elementUrl, data);
             });
-            cursor.on('end', function () {
+            cursor.on('end', ()=>{
                 queryState.foundEnd();
                 dbgBroker("%s cursor end", def.id);
             });
+            */
         };
         return Broker;
     }());
@@ -747,8 +769,16 @@ var __extends = (this && this.__extends) || function (d, b) {
                 this.broker.unsubscribe(this.forwarder, k);
             }
         };
+        SimpleQueryState.prototype.counted = function (num) {
+            this.handler.queryCount(this.id, num);
+        };
         SimpleQueryState.prototype.found = function (path, data) {
             var _this = this;
+            // apply handler security checks here to exclude elements
+            data = this.handler.authData.filterRead(path, data);
+            // TODO return something here, so that we know if the value was sent or not
+            if (!data || Utils.isEmpty(data))
+                return false;
             var ind = this.invalues.length;
             var eleVal = null;
             if (this.def.compareField) {
@@ -776,6 +806,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 _this.fetchingCnt--;
                 _this.checkEnd();
             });
+            return true;
         };
         SimpleQueryState.prototype.exited = function (path, ind) {
             this.handler.queryExit(path, this.id);
@@ -845,6 +876,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                     if (eleVal > this.def.to)
                         return this.checkExit(path);
                 }
+                // TODO Check security rules here, eventually add/remove the element
                 var eleSort = null;
                 if (this.def.sortField) {
                     eleSort = val[Utils.leafPath(this.def.sortField)];
@@ -880,6 +912,183 @@ var __extends = (this && this.__extends) || function (d, b) {
             return;
         fn(val);
     }
+    var NopAuthService = (function () {
+        function NopAuthService() {
+        }
+        NopAuthService.prototype.authenticate = function (socket) {
+            return Promise.resolve({});
+        };
+        return NopAuthService;
+    }());
+    var NopAuthData = (function () {
+        function NopAuthData() {
+        }
+        NopAuthData.prototype.filterRead = function (path, value) {
+            return value;
+        };
+        NopAuthData.prototype.filterWrite = function (path, value) {
+            return value;
+        };
+        return NopAuthData;
+    }());
+    exports.NopAuthData = NopAuthData;
+    var SimpleAuthRule = (function () {
+        function SimpleAuthRule(path, fnc) {
+            this.path = path;
+            this.fnc = fnc;
+        }
+        return SimpleAuthRule;
+    }());
+    exports.SimpleAuthRule = SimpleAuthRule;
+    var SimpleAuthRules = (function () {
+        function SimpleAuthRules() {
+            var rules = [];
+            for (var _i = 0; _i < arguments.length; _i++) {
+                rules[_i - 0] = arguments[_i];
+            }
+            this.rules = {};
+            for (var i = 0; i < rules.length; i++)
+                this.addRule(rules[i]);
+        }
+        SimpleAuthRules.prototype.addRule = function (pathOrRule, fnc) {
+            var path;
+            if (pathOrRule instanceof SimpleAuthRule) {
+                path = pathOrRule.path;
+                fnc = pathOrRule.fnc;
+            }
+            else {
+                path = pathOrRule;
+            }
+            if (typeof (fnc) != 'function') {
+                var retval = fnc;
+                fnc = function () { return retval; };
+            }
+            var split = path.split('/');
+            var cr = this.rules;
+            for (var i = 0; i < split.length; i++) {
+                var seg = split[i];
+                if (seg.length == 0)
+                    continue;
+                if (cr[seg]) {
+                    cr = cr[seg];
+                }
+                else {
+                    var no = {};
+                    cr[seg] = no;
+                    cr = no;
+                }
+            }
+            cr.__function = fnc;
+        };
+        SimpleAuthRules.prototype.normalize = function (path, value) {
+            var split = path.split('/');
+            var acv = value;
+            for (var i = split.length - 1; i >= 0; i--) {
+                var seg = split[i];
+                if (seg.length == 0)
+                    continue;
+                var no = {};
+                no[seg] = acv;
+                acv = no;
+            }
+            return acv;
+        };
+        SimpleAuthRules.prototype.denormalize = function (path, normalized) {
+            var split = path.split('/');
+            var cr = normalized;
+            for (var i = 0; i < split.length; i++) {
+                var seg = split[i];
+                if (seg.length == 0)
+                    continue;
+                cr = cr[seg];
+                if (!cr)
+                    return null;
+            }
+            return cr;
+        };
+        SimpleAuthRules.prototype.filterValue = function (path, val, userData) {
+            var norm = this.normalize(path, val);
+            var nval = this.iterate("", norm, this.rules, userData, {});
+            dbgRules("Returning value", nval);
+            return this.denormalize(path, nval);
+        };
+        SimpleAuthRules.prototype.iterate = function (path, val, rules, userData, match) {
+            dbgRules("Evaluating %s", path);
+            var ret = val;
+            if (rules.__function) {
+                dbgRules("Found function, using match %o", match);
+                ret = rules.__function(match, userData, val);
+                dbgRules("Function, returned: " + ret);
+                if (ret === false)
+                    return false;
+                if (ret === true) {
+                    ret = val;
+                }
+                else {
+                    val = ret;
+                }
+            }
+            if (!val)
+                return val;
+            for (var k in rules) {
+                if (k === '__function')
+                    continue;
+                var acrule = rules[k];
+                var matchK = null;
+                var iterKeys = [k];
+                if (k.charAt(0) == '$') {
+                    matchK = k;
+                    iterKeys = [];
+                    for (var subk in val) {
+                        if (!rules[subk])
+                            iterKeys.push(subk);
+                    }
+                }
+                for (var ki = 0; ki < iterKeys.length; ki++) {
+                    var kv = iterKeys[ki];
+                    var cv = val[kv];
+                    if (typeof (cv) === 'undefined')
+                        continue;
+                    var cret = this.iterate(path + '/' + kv, cv, acrule, userData, this.subMatch(match, matchK, kv));
+                    if (cret === false) {
+                        delete val[kv];
+                    }
+                    else if (cret !== true) {
+                        val[kv] = cret;
+                    }
+                }
+            }
+            return ret;
+        };
+        SimpleAuthRules.prototype.subMatch = function (match, key, val) {
+            if (!key)
+                return match;
+            var ret = {};
+            for (var k in match)
+                ret[k] = match[k];
+            ret[key] = val;
+            return ret;
+        };
+        return SimpleAuthRules;
+    }());
+    exports.SimpleAuthRules = SimpleAuthRules;
+    var SimpleAuthData = (function () {
+        function SimpleAuthData(userData, readRules, writeRules) {
+            this.userData = userData;
+            this.readRules = readRules;
+            this.writeRules = writeRules;
+        }
+        SimpleAuthData.prototype.filterRead = function (path, value) {
+            var ret = this.readRules.filterValue(path, value, this.userData);
+            dbgRules("While reading %s returned %O", path, value);
+            return ret;
+        };
+        SimpleAuthData.prototype.filterWrite = function (path, value) {
+            return this.writeRules.filterValue(path, value, this.userData);
+        };
+        return SimpleAuthData;
+    }());
+    exports.SimpleAuthData = SimpleAuthData;
     // Does not need to export, but there are no friendly/package/module accessible methods, and Broker.subscribe will complain is Handler is private
     var Handler = (function () {
         // TODO a read-write lock that avoids sending to the client stale data.
@@ -908,6 +1117,8 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.readQueue = [];
             this.writeProg = 1;
             this.id = socket.id.substr(2);
+            if (!this.authData)
+                this.authData = new NopAuthData();
             dbgHandler("%s handler created", this.id);
             socket.on('sp', function (path, fn) { return _this.enqueueRead(function () { return filterAck(fn, _this.subscribePath(path)); }); });
             socket.on('up', function (path, fn) { return filterAck(fn, _this.unsubscribePath(path)); });
@@ -1073,8 +1284,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         Handler.prototype.sendValue = function (path, val, prog, extra) {
             if (this.closed)
                 return;
-            // TODO evaluate query matching
-            // TODO security filter here?
+            val = this.authData.filterRead(path, val);
             var msg = { p: path, v: val, n: prog };
             for (var k in extra) {
                 msg[k] = extra[k];
@@ -1085,6 +1295,12 @@ var __extends = (this && this.__extends) || function (d, b) {
                 delete this.ongoingReads[path];
                 this.dequeue();
             }
+        };
+        Handler.prototype.queryCount = function (queryId, num) {
+            if (this.closed)
+                return;
+            dbgHandler("%s sending query count %s:%s", this.id, queryId, num);
+            this.socket.emit('qc', { q: queryId, c: num, n: this.writeProg });
         };
         Handler.prototype.queryFetchEnd = function (queryId) {
             if (this.closed)

@@ -1,8 +1,5 @@
 import * as Mongo from 'mongodb';
 export declare var VERSION: string;
-export interface AuthService {
-    authenticate(socket: Socket, data: any): Promise<Object>;
-}
 export interface Socket {
     id: string;
     on(event: string, cb: (...args: any[]) => any): any;
@@ -34,7 +31,7 @@ export declare class Broker {
     initOplog(oplogDb: string): this;
     setAuthService(value: AuthService): this;
     start(): Promise<any>;
-    handle(sock: Socket, authData: any): Handler;
+    handle(sock: Socket, authData: AuthData): Handler;
     private hookOplog();
     register(handler: Handler): void;
     unregister(handler: Handler): void;
@@ -99,16 +96,62 @@ export declare class SimpleQueryState implements Subscriber {
      */
     start(): void;
     stop(): void;
-    found(path: string, data: any): void;
+    counted(num: number): void;
+    found(path: string, data: any): boolean;
     exited(path: string, ind?: number): void;
     foundEnd(): void;
     checkEnd(): void;
     checkExit(path: string): void;
     sendValue(path: string, val: any, prog: number, extra?: any): void;
 }
+export interface AuthService {
+    authenticate(socket: Socket, data: any): Promise<AuthData>;
+}
+export interface AuthData {
+    filterRead(path: string, value: Object): Object;
+    filterWrite(path: string, value: Object): Object;
+}
+export declare class NopAuthData implements AuthData {
+    filterRead(path: string, value: Object): Object;
+    filterWrite(path: string, value: Object): Object;
+}
+export declare type SimpleAuthRuleReturn = boolean | Object;
+/**
+ * Simple tree rule function.
+ *
+ * @param match the match resolved so far, matches are variables in the tree starting with '$'
+ * @param userData the userData as contained in AuthData
+ * @param value the value being sent, could be a partial value so don't rely on its completeness when evaluating your rule.
+ */
+export interface SimpleAuthRuleFunction {
+    (match: any, userData: any, value: Object): SimpleAuthRuleReturn;
+}
+export declare class SimpleAuthRule {
+    path: string;
+    fnc: SimpleAuthRuleFunction;
+    constructor(path: string, fnc: SimpleAuthRuleFunction);
+}
+export declare class SimpleAuthRules {
+    private rules;
+    constructor(...rules: SimpleAuthRule[]);
+    addRule(rule: SimpleAuthRule): void;
+    private normalize(path, value);
+    private denormalize(path, normalized);
+    filterValue(path: string, val: Object, userData: any): Object;
+    private iterate(path, val, rules, userData, match);
+    private subMatch(match, key, val);
+}
+export declare class SimpleAuthData implements AuthData {
+    private userData;
+    private readRules;
+    private writeRules;
+    constructor(userData: any, readRules: SimpleAuthRules, writeRules: SimpleAuthRules);
+    filterRead(path: string, value: Object): Object;
+    filterWrite(path: string, value: Object): Object;
+}
 export declare class Handler implements Subscriber {
     private socket;
-    private authData;
+    authData: AuthData;
     private broker;
     id: string;
     closed: boolean;
@@ -119,11 +162,11 @@ export declare class Handler implements Subscriber {
     private writeQueue;
     private readQueue;
     writeProg: number;
-    constructor(socket: Socket, authData: Object, broker: Broker);
+    constructor(socket: Socket, authData: AuthData, broker: Broker);
     private enqueueRead(fn);
     private enqueueWrite(fn);
     private dequeue();
-    updateAuthData(data: any): void;
+    updateAuthData(data: AuthData): void;
     close(): void;
     subscribePath(path: string): string;
     unsubscribePath(path: string): string;
@@ -133,6 +176,7 @@ export declare class Handler implements Subscriber {
     set(path: string, val: any, prog: number, cb: Function): void;
     merge(path: string, val: any, prog: number, cb: Function): void;
     sendValue(path: string, val: any, prog: number, extra?: any): void;
+    queryCount(queryId: string, num: number): void;
     queryFetchEnd(queryId: string): void;
     queryExit(path: string, queryId: string): void;
 }
