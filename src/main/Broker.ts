@@ -16,18 +16,9 @@ var dbgQuery = Debug('tsdb:mongo:query');
 var dbgOplog = Debug('tsdb:mongo:oplog');
 var dbgSocket = Debug('tsdb:mongo:socket');
 var dbgHandler = Debug('tsdb:mongo:handler');
+var dbgRules = Debug('tsdb:mongo:rules');
 
 export var VERSION = "VERSION_TAG";
-
-export interface AuthService {
-    authenticate(socket :Socket, data :any):Promise<Object>;
-}
-
-class NopAuthService implements AuthService {
-    authenticate(socket :Socket):Promise<Object> {
-        return Promise.resolve({});
-    }
-}
 
 var progHandler = 0;
 
@@ -172,7 +163,7 @@ export class Broker {
         });
     }
 
-    public handle(sock :Socket, authData :any) :Handler {
+    public handle(sock :Socket, authData :AuthData) :Handler {
         var handler = new Handler(sock, authData, this);
         sock.on('auth', (data:any)=>{
             this.auth.authenticate(sock, data).then((authData)=>{
@@ -525,18 +516,18 @@ export class Broker {
                         recomposer.add(data[i]);
                     }
                     handler.sendValue(path,recomposer.get(), preprog, extra);
-                    return;
-                } 
-                this.collection.findOne({_id:Utils.parentPath(path)}).then((val)=>{
-                    if (val == null) {
-                        dbgBroker("Found no value on path %s using parent", path);
-                        handler.sendValue(path, null, preprog, extra);
-                    } else {
-                        var leaf = Utils.leafPath(path);
-                        dbgBroker("Found %s on path %s using parent", val[leaf], path);
-                        handler.sendValue(path, val[leaf], preprog, extra);
-                    }
-                });
+                } else {
+                    this.collection.findOne({_id:Utils.parentPath(path)}).then((val)=>{
+                        if (val == null) {
+                            dbgBroker("Found no value on path %s using parent", path);
+                            handler.sendValue(path, null, preprog, extra);
+                        } else {
+                            var leaf = Utils.leafPath(path);
+                            dbgBroker("Found %s on path %s using parent", val[leaf], path);
+                            handler.sendValue(path, val[leaf], preprog, extra);
+                        }
+                    });
+                }
             })
             .catch((e)=>{
                 dbgBroker("Had error %s", e);
@@ -566,6 +557,15 @@ export class Broker {
         dbgBroker("%s query object %o", queryState.id, qo);
 
         var cursor = this.collection.find(qo);
+        cursor.count(false, (err, num)=>{
+            queryState.counted(num);
+            if (def.limit === 0) {
+                queryState.foundEnd();
+            }
+        });
+        if (def.limit === 0) {
+            return;
+        }
 
         var sortobj :any = {};
         if (def.sortField) {
@@ -579,12 +579,30 @@ export class Broker {
 
         dbgBroker("%s sort object %o", queryState.id, sortobj);
 
-        if (def.limit) {
-            cursor = cursor.limit(def.limit);
+        if (def.limit > 0) {
+            cursor = cursor.batchSize(def.limit);
         }
 
         //return cursor.toArray().then((data)=>console.log(data));
 
+        var counter = 0;
+        function handle(data :any) :Promise<any> {
+            if (!data || counter > def.limit) {
+                queryState.foundEnd();
+                dbgBroker("%s cursor end", def.id);
+                return null;
+            } else {
+                var elementUrl = Utils.limitToChild(data._id, def.path);
+                if (queryState.found(elementUrl, data)) {
+                    counter++;
+                }
+                return cursor.next().then(handle);
+            }
+        }
+
+        cursor.next().then(handle);
+
+        /*
         cursor = cursor.stream();
 
         cursor.on('data', (data :any)=>{
@@ -595,6 +613,7 @@ export class Broker {
             queryState.foundEnd();
             dbgBroker("%s cursor end", def.id);
         });
+        */
     }
 
 }
@@ -805,7 +824,16 @@ export class SimpleQueryState implements Subscriber {
         }
     }
 
-    found(path :string, data :any) {
+    counted(num:number) {
+        this.handler.queryCount(this.id, num);
+    }
+
+    found(path :string, data :any) :boolean {
+        // apply handler security checks here to exclude elements
+        data = this.handler.authData.filterRead(path,data);
+        // TODO return something here, so that we know if the value was sent or not
+        if (!data || Utils.isEmpty(data)) return false;
+
         var ind = this.invalues.length;
         var eleVal :any = null;
         if (this.def.compareField) {
@@ -832,6 +860,7 @@ export class SimpleQueryState implements Subscriber {
             this.fetchingCnt--;
             this.checkEnd();
         });
+        return true;
     }
 
     exited(path :string, ind? :number) {
@@ -901,6 +930,7 @@ export class SimpleQueryState implements Subscriber {
             } else if (typeof(this.def.to) !== 'undefined') {
                 if (eleVal > this.def.to) return this.checkExit(path);
             }
+            // TODO Check security rules here, eventually add/remove the element
 
             var eleSort :any = null;
             if (this.def.sortField) {
@@ -935,6 +965,185 @@ function filterAck(fn :Function, val :any) {
     fn(val);
 }
 
+
+export interface AuthService {
+    authenticate(socket :Socket, data :any) :Promise<AuthData>;
+}
+
+class NopAuthService implements AuthService {
+    authenticate(socket :Socket) :Promise<AuthData> {
+        return Promise.resolve({});
+    }
+}
+
+export interface AuthData {
+    filterRead(path :string, value :Object) :Object;
+    filterWrite(path :string, value :Object) :Object;
+}
+
+export class NopAuthData implements AuthData {
+    filterRead(path :string, value :Object) :Object {
+        return value;
+    }
+    filterWrite(path :string, value :Object) :Object {
+        return value;
+    }
+}
+
+export type SimpleAuthRuleReturn = boolean | Object;
+
+/**
+ * Simple tree rule function. 
+ * 
+ * @param match the match resolved so far, matches are variables in the tree starting with '$'
+ * @param userData the userData as contained in AuthData
+ * @param value the value being sent, could be a partial value so don't rely on its completeness when evaluating your rule.
+ */
+export interface SimpleAuthRuleFunction {
+    (match :any, userData :any, value :Object) :SimpleAuthRuleReturn;
+}
+
+export class SimpleAuthRule {
+    constructor(public path :string, public fnc :SimpleAuthRuleFunction) {}
+}
+
+export class SimpleAuthRules {
+    private rules :any = {};
+
+    constructor(...rules :SimpleAuthRule[]) {
+        for (var i = 0; i < rules.length; i++) this.addRule(rules[i]);
+    }
+
+    public addRule(rule :SimpleAuthRule) :void;
+    public addRule(pathOrRule :string|SimpleAuthRule, fnc? :SimpleAuthRuleFunction|boolean) :void {
+        var path :string;
+        if (pathOrRule instanceof SimpleAuthRule) {
+            path = pathOrRule.path;
+            fnc = pathOrRule.fnc;
+        } else {
+            path = <string>pathOrRule;
+        }
+        if (typeof(fnc) != 'function') {
+            var retval = fnc;
+            fnc = ()=>retval;
+        }
+        var split = path.split('/');
+        var cr = this.rules;
+        for (var i = 0; i < split.length; i++) {
+            var seg = split[i];
+            if (seg.length == 0) continue;
+            if (cr[seg]) {
+                cr = cr[seg];
+            } else {
+                var no = {};
+                cr[seg] = no;
+                cr = no;
+            }
+        }
+        cr.__function = fnc;
+    }
+
+    private normalize(path :string, value :Object) :Object {
+        var split = path.split('/');
+        var acv = value;
+        for (var i = split.length - 1; i >= 0; i--) {
+            var seg = split[i];
+            if (seg.length == 0) continue;
+            var no :any = {};
+            no[seg] = acv;
+            acv = no;
+        }
+        return acv;
+    }
+
+    private denormalize(path :string, normalized :any) :Object {
+        var split = path.split('/');
+        var cr = normalized;
+        for (var i = 0; i < split.length; i++) {
+            var seg = split[i];
+            if (seg.length == 0) continue;
+            cr = cr[seg];
+            if (!cr) return null;
+        }
+        return cr;
+    }
+
+    public filterValue(path :string, val :Object, userData :any) :Object {
+        var norm = this.normalize(path, val);
+        var nval = this.iterate("", norm, this.rules, userData, {});
+        dbgRules("Returning value", nval);
+        return this.denormalize(path, nval);
+    }
+
+    private iterate(path :string, val :any, rules :any, userData :any, match :any) :boolean|Object {
+        dbgRules("Evaluating %s", path);
+        var ret :any = val;
+        if (rules.__function) {
+            dbgRules("Found function, using match %o", match);
+            ret = (<SimpleAuthRuleFunction>rules.__function)(match, userData, val);
+            dbgRules("Function, returned: " + ret);
+            if (ret === false) return false;
+            if (ret === true) {
+                ret = val;
+            } else {
+                val = ret;
+            }
+        }
+        if (!val) return val;
+        for (var k in rules) {
+            if (k === '__function') continue;
+            var acrule = rules[k];
+            var matchK :string = null;
+            var iterKeys :string[] = [k];
+            if (k.charAt(0) == '$') {
+                matchK = k;
+                iterKeys = [];
+                for (var subk in val) {
+                    if (!rules[subk]) iterKeys.push(subk);
+                }
+            }
+            for (var ki = 0; ki < iterKeys.length; ki++) {
+                var kv = iterKeys[ki];
+                var cv = val[kv];
+                if (typeof(cv) === 'undefined') continue;
+                var cret = this.iterate(path + '/' + kv, cv, acrule, userData, this.subMatch(match, matchK, kv));
+                if (cret === false) {
+                    delete val[kv];
+                } else if (cret !== true) {
+                    val[kv] = cret;
+                }
+            }
+        }
+        return ret;
+    }
+
+    private subMatch(match :any, key :string, val :string) {
+        if (!key) return match;
+        var ret :any = {};
+        for (var k in match) ret[k] = match[k];
+        ret[key] = val;
+        return ret;
+    }
+}
+
+export class SimpleAuthData implements AuthData {
+    constructor(
+        private userData :any,
+        private readRules :SimpleAuthRules,
+        private writeRules :SimpleAuthRules
+    ) {}
+
+    filterRead(path :string, value :Object) :Object {
+        var ret = this.readRules.filterValue(path, value, this.userData);
+        dbgRules("While reading %s returned %O", path, value);
+        return ret;
+    }
+    filterWrite(path :string, value :Object) :Object {
+        return this.writeRules.filterValue(path, value, this.userData);
+    }
+}
+
+
 // Does not need to export, but there are no friendly/package/module accessible methods, and Broker.subscribe will complain is Handler is private
 export class Handler implements Subscriber {
 
@@ -967,10 +1176,11 @@ export class Handler implements Subscriber {
  
     constructor(
         private socket :Socket,
-        private authData :Object,
+        public authData :AuthData,
         private broker :Broker
     ) {
         this.id = socket.id.substr(2);
+        if (!this.authData) this.authData = new NopAuthData();
         dbgHandler("%s handler created", this.id);
 
         socket.on('sp', (path:string,fn:Function)=>this.enqueueRead(()=>filterAck(fn,this.subscribePath(path))));
@@ -1033,7 +1243,7 @@ export class Handler implements Subscriber {
     }
 
 
-    updateAuthData(data :any) {
+    updateAuthData(data :AuthData) {
         this.authData = data;
     }
 
@@ -1154,8 +1364,7 @@ export class Handler implements Subscriber {
 
     sendValue(path :string, val :any, prog :number, extra? :any) {
         if (this.closed) return;
-        // TODO evaluate query matching
-        // TODO security filter here?
+        val = this.authData.filterRead(path, val);
         var msg :any = {p:path,v:val, n:prog};
         for (var k in extra) {
             msg[k] = extra[k];
@@ -1166,6 +1375,12 @@ export class Handler implements Subscriber {
             delete this.ongoingReads[path];
             this.dequeue();
         }
+    }
+
+    queryCount(queryId :string, num :number) {
+        if (this.closed) return;
+        dbgHandler("%s sending query count %s:%s", this.id, queryId, num);
+        this.socket.emit('qc', {q:queryId, c: num, n:this.writeProg});
     }
 
     queryFetchEnd(queryId :string) {

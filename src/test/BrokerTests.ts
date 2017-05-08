@@ -6,7 +6,7 @@ Debug.enable('tsdb:*');
 import * as SocketIO from 'socket.io';
 import * as SocketClient from 'socket.io-client';
 
-import {Broker,AuthService,SimpleQueryDef,SimpleQueryState,Handler,Recomposer,Socket,LocalSocket} from '../main/Broker';
+import {Broker,AuthService,AuthData,SimpleAuthData,SimpleAuthRules,SimpleQueryDef,SimpleQueryState,Handler,Recomposer,Socket,LocalSocket} from '../main/Broker';
 import * as Utils from '../main/Utils';
 
 import {assert,is} from 'tsmatchers';
@@ -1347,6 +1347,163 @@ describe("Broker >", ()=>{
             // TODO check entry/exit on range and limit
 
 
+        });
+    });
+});
+
+interface TestAccessSimpleAuthRules {
+    rules :any;
+    normalize(path :string, value :Object) :Object;
+    denormalize(path :string, normalized :any) :Object;
+}
+
+type TestSimpleAuthRules = SimpleAuthRules & TestAccessSimpleAuthRules;
+
+describe("Security >", ()=>{
+    describe("SimpleAuthData >", ()=>{
+        it("Should setup correct functions", ()=>{
+            var sar = <TestSimpleAuthRules>new SimpleAuthRules();
+            sar.addRule("/users/$uid/password", ()=>false);
+            sar.addRule("/users/$uid/projects", ()=>false);
+            sar.addRule("/users/$uid", ()=>false);
+            sar.addRule("/projects/$pid", ()=>false);
+
+            assert("Rules are in a correct tree", sar.rules, is.object.matching({
+                users: {
+                    "$uid" : {
+                        password: {
+                            __function: is.function
+                        },
+                        projects: {
+                            __function: is.function
+                        },
+                        __function: is.function
+                    }
+                },
+                projects: {
+                    "$pid": {
+                        __function: is.function
+                    }
+                }
+            }));
+        });
+
+        it("Should normalize and denormalize path and object", ()=>{
+            var sar = <TestSimpleAuthRules>new SimpleAuthRules();
+            var normalized = sar.normalize("/users/123", {name:"simone", projects: {"456":true}});
+            assert("Object is normalized", normalized, is.object.matching({
+                users: {
+                    "123": {
+                        name: "simone",
+                        projects: {
+                            "456":true
+                        }
+                    }
+                }
+            }));
+
+            var denormalized = sar.denormalize("/users/123", normalized);
+            assert("Object is denormalized", denormalized, is.object.matching({
+                name: "simone",
+                projects: {
+                    "456":true
+                }
+            }));
+        });
+
+        it("Should apply correct functions", ()=>{
+            var calls :string[] = [];
+            var logCall = (val)=>{
+                return ()=>{
+                    calls.push(val);
+                    return true;
+                }
+            };
+            var sar = <TestSimpleAuthRules>new SimpleAuthRules();
+            sar.addRule("/users/123/password", logCall("pass"));
+            sar.addRule("/users/123/projects", logCall("proj"));
+            sar.addRule("/users/123", logCall("user"));
+            sar.addRule("/projects/456", logCall("project"));
+
+            sar.filterValue("/users/123", {name:"simone", projects: {"456":true}}, null);
+            assert(calls, is.array.equals(["user","proj"]));
+        });
+
+        it("Shoud remove leaf", ()=>{
+            var sar = <TestSimpleAuthRules>new SimpleAuthRules();
+            sar.addRule("/users/123/password", ()=>false);
+            sar.addRule("/users/123/projects", ()=>true);
+            sar.addRule("/users/123/name", ()=>"topsecret");
+
+            var result = sar.filterValue("/users/123", {name:"simone", password:"secret", projects: {"456":true}}, null);
+            assert("leafs manipulated correctly", result, is.object.matching({
+                name: "topsecret",
+                password: is.undefined,
+                projects: {
+                    "456": true
+                }
+            }));
+        });
+
+        it("Should replace subtree", ()=> {
+            var sar = <TestSimpleAuthRules>new SimpleAuthRules();
+            sar.addRule("/users/123/users", ()=>false);
+            sar.addRule("/users/123/projects", ()=>true);
+            sar.addRule("/users/123/mentions", ()=>({a:1,b:2,c:3}));
+
+            var result = sar.filterValue("/users/123", {users:{d:4,e:5}, projects: {"456":true}, mentions:{f:6,g:7}}, null);
+            assert("subtrees manipulated correctly", result, is.object.matching({
+                users: is.undefined,
+                projects: {
+                    "456": true
+                },
+                mentions: {a:1,b:2,c:3}
+            }));
+        });
+
+        it("Should fill matchings", ()=>{
+            var calls :any = {};
+            var logCall = (key :string)=>{
+                return (matching)=>{
+                    calls[key] = matching;
+                    return true;
+                }
+            };
+
+            var sar = <TestSimpleAuthRules>new SimpleAuthRules();
+            sar.addRule("/users/$uid", logCall("userRoot"));
+            sar.addRule("/users/$uid/name", logCall("userName"));
+            sar.addRule("/users/$uid/projects/$pid", logCall("userProject"));
+            sar.addRule("/projects/$pid/name", logCall("projectName"));
+
+            sar.filterValue("/users/123", {name:"simone", password:"secret", projects: {"456":true}}, null);
+            sar.filterValue("/projects/888", {name:"prj"}, null);
+
+            assert("Matching is correct", calls, is.object.matching({
+                userRoot: {$uid:"123"},
+                userName: {$uid:"123"},
+                userProject: {$uid:"123",$pid:"456"},
+                projectName: {$pid:"888"}
+            }));
+        });
+
+        it("Should iterate on matchings", ()=>{
+            var calls :any[] = [];
+            var logCall = ()=>{
+                return (matching)=>{
+                    calls.push(matching);
+                    return true;
+                }
+            };
+            
+            var sar = <TestSimpleAuthRules>new SimpleAuthRules();
+            sar.addRule("/users/$uid/name", logCall());
+
+            sar.filterValue("/users", {"1":{name:"simone"}, "2":{name:"gili"}, "3":{name:"who"}}, null);
+            assert("Iterated on all three users", calls, is.array.withLength(3));
+            assert("User 1 is correct", calls[0], is.strictly.object.matching({$uid:"1"}));
+            assert("User 2 is correct", calls[1], is.strictly.object.matching({$uid:"2"}));
+            assert("User 3 is correct", calls[2], is.strictly.object.matching({$uid:"3"}));
         });
     });
 });
